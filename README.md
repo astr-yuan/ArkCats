@@ -6,11 +6,37 @@ Miss. Christine 是一只坐在键盘前的 Windows 桌宠。她有两条黑色�
 
 ## 下载与运行
 
-支持 Windows 10 和 Windows 11 x64。已在 Windows 11 25H2、2560 × 1440 分辨率、150% 显示缩放下验证。
+适用于 Windows 10（1607 及以上）和 Windows 11 x64。通知组件需要 .NET Framework 4.8 或 4.8.1。已在 Windows 11 25H2、2560 × 1440 分辨率、150% 显示缩放下验证。
 
 1. 下载 [Windows x64 压缩包](https://github.com/astr-yuan/Miss-Christine/releases/latest/download/Miss-Christine-Windows-x64.zip)。版本记录见 [最新发行版](https://github.com/astr-yuan/Miss-Christine/releases/latest)。
-2. 解压到准备长期存放的文件夹，双击 `KuroCat.exe`。小猫会出现在桌面，任务栏通知区域也会出现猫咪图标。
+2. 将整个 ZIP 解压到准备长期存放的文件夹，保留 `KuroCat.exe` 和 `ChristineNotifications.exe` 在同一目录。双击 `KuroCat.exe` 即可启动。小猫会出现在桌面，任务栏通知区域也会出现猫咪图标。
 3. 拖动小猫可以移动位置。右键小猫或点击托盘图标打开菜单，选择「退出 KuroCat」即可关闭。
+
+从旧版升级时，先在托盘中退出旧版，再把新版解压到原目录。已有的皮肤、位置和尺寸设置会沿用。
+
+## 收到 Windows 通知时
+
+右键小猫或点击托盘猫图标，勾选 **「收到 Windows 通知时做出反应」**，并在系统询问时允许通知访问。首次使用时此功能默认关闭。再次点击同一项即可关闭。
+
+当任意应用在 Windows 通知中心添加一条通知，小猫会根据当时的姿势作出反应。
+
+| 当时的状态 | 小猫的动作 |
+| --- | --- |
+| 待机 | 耳朵竖起，身子轻弹，两条尾巴一挑。 |
+| 打瞌睡 | 慢半拍睁圆眼睛、抬起头，再慢慢眯回去。 |
+| 敲键盘 | 两只爪子在键面上方停一下，然后接着敲。 |
+| 用鼠标 | 一只爪子搭着鼠标，另一只轻缩，回头张望后继续追光标。 |
+
+<details>
+<summary>查看四种动作的同步演示</summary>
+
+![同一条模拟通知到达时，Miss. Christine 在四种姿势下的反应](assets/notification-reactions.webp)
+
+</details>
+
+开启时已有的通知会被跳过，五秒内连续到达的多条通知合并为一次动作。程序在本机定期比较通知编号与创建时间，消息标题、正文和发送者信息均无需读取。要体验一次，可以让平时就会出现在通知中心的应用产生一条新通知，并保留几秒。在 Windows 11 上按 `Win + N` 可以查看通知中心。
+
+菜单显示「已就绪，等待新通知」时，监听已开始。如果 Windows 拒绝访问，可以在系统设置中允许通知访问，再从小猫菜单选择「重新连接并检查通知权限」。
 
 ## 与小猫互动
 
@@ -30,7 +56,7 @@ cd windows
 build.bat
 ```
 
-构建产物为 `windows/KuroCat.exe`。工程也支持 CMake 3.20 及以上版本。
+构建会同时生成 `windows/KuroCat.exe` 和 `windows/ChristineNotifications.exe`。通知组件使用 Windows 的 .NET Framework 4.8 和 WinRT 通知接口。工程也支持 CMake 3.20 及以上版本。
 
 ## 来源与许可
 

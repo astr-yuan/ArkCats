@@ -18,6 +18,7 @@
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
 #include "CatRenderer.hpp"
+#include "NotificationBridge.hpp"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -31,6 +32,7 @@ constexpr wchar_t kPetName[] = L"Miss. Christine";
 constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT WM_WAKE_EXISTING = WM_APP + 2;
 constexpr UINT_PTR TIMER_RENDER = 1;
+constexpr UINT_PTR TIMER_NOTIFICATIONS = 2;
 constexpr int HOTKEY_CLICKTHROUGH_ID = 101;
 UINT g_msgTaskbarCreated = 0;
 
@@ -63,7 +65,9 @@ enum MenuCmd : UINT {
     CMD_SCALE_150,
     CMD_DEMO_BURST,
     CMD_RESET_POS,
-    CMD_QUIT
+    CMD_QUIT,
+    CMD_TOGGLE_NOTIFICATIONS,
+    CMD_RETRY_NOTIFICATIONS
 };
 
 struct AppState {
@@ -75,6 +79,11 @@ struct AppState {
     CatSettings settings;
     InputEngine input;
     CatPhysics physics;
+    NotificationBridge notifications;
+    bool sessionUnavailable = false;
+    bool suspended = false;
+    bool requestAccessOnShow = false;
+    bool sessionEventsRegistered = false;
 
     bool isVisible = true;
     bool isDragging = false;
@@ -304,6 +313,20 @@ void setClickThrough(HWND hwnd, bool transparent) {
     }
 }
 
+void refreshNotifications(AppState& app) {
+    if (!app.settings.notificationReactions) return;
+    if (!app.isVisible || app.suspended || app.sessionUnavailable ||
+        !NotificationBridge::hasInteractiveDesktop()) {
+        app.notifications.stop();
+        return;
+    }
+    app.notifications.poll();
+    if (app.notifications.state() == NotificationBridge::State::Paused) {
+        app.notifications.start(app.hwnd, app.requestAccessOnShow);
+        app.requestAccessOnShow = false;
+    }
+}
+
 void setPetVisible(AppState& app, bool visible) {
     app.isVisible = visible;
     app.hasLastHover = false;
@@ -323,9 +346,11 @@ void setPetVisible(AppState& app, bool visible) {
         app.physics.floatingKeycaps.clear();
         ShowWindow(app.hwnd, SW_HIDE);
     }
+    refreshNotifications(app);
 }
 
 void showContextMenu(AppState& app, POINT screenPt) {
+    refreshNotifications(app);
     HMENU menu = CreatePopupMenu();
 
     // Status & live stats header
@@ -344,6 +369,16 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH, L"\u5B8C\u5168\u9F20\u6807\u7A7F\u900F (Ctrl+Alt+Shift+P / \u6309\u4F4FAlt\u53EF\u53F3\u952E)");
     AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A");
     AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    AppendMenuW(menu, MF_STRING | (app.settings.notificationReactions ? MF_CHECKED : 0),
+                CMD_TOGGLE_NOTIFICATIONS, L"收到 Windows 通知时做出反应");
+    if (app.settings.notificationReactions) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, app.notifications.statusText());
+        if (app.notifications.canRetry()) {
+            AppendMenuW(menu, MF_STRING, CMD_RETRY_NOTIFICATIONS, L"重新连接并检查通知权限");
+        }
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING | (app.settings.showKeyBadges ? MF_CHECKED : 0), CMD_TOGGLE_BADGES, L"\u663E\u793A\u6309\u952E\u6C14\u6CE1 ([S] [W] [\u21E7])");
@@ -401,6 +436,23 @@ void showContextMenu(AppState& app, POINT screenPt) {
     DestroyMenu(menu);
 
     switch (cmd) {
+        case CMD_TOGGLE_NOTIFICATIONS:
+            app.settings.notificationReactions = !app.settings.notificationReactions;
+            app.settings.saveToRegistry();
+            app.requestAccessOnShow = app.settings.notificationReactions;
+            if (app.settings.notificationReactions) {
+                SetTimer(app.hwnd, TIMER_NOTIFICATIONS, 1000, nullptr);
+                refreshNotifications(app);
+            } else {
+                KillTimer(app.hwnd, TIMER_NOTIFICATIONS);
+                app.notifications.stop();
+            }
+            break;
+        case CMD_RETRY_NOTIFICATIONS:
+            app.notifications.stop();
+            app.requestAccessOnShow = true;
+            refreshNotifications(app);
+            break;
         case CMD_TOGGLE_VISIBLE:
             setPetVisible(app, !app.isVisible);
             break;
@@ -578,7 +630,52 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_TIMER:
             if (wParam == TIMER_RENDER && app) tickAndRender(*app);
+            if (wParam == TIMER_NOTIFICATIONS && app) refreshNotifications(*app);
             return 0;
+
+        case WM_PET_NOTIFICATION:
+            if (app && hwnd == app->hwnd && app->settings.notificationReactions &&
+                app->notifications.receive(wParam, lParam)) {
+                // Rebuild a baseline on return to the desktop. Never replay a queued
+                // alert that sat on the UI thread through a suspension or long stall.
+                if (!app->isVisible || app->sessionUnavailable || app->suspended ||
+                    !NotificationBridge::hasInteractiveDesktop()) {
+                    app->notifications.stop();
+                } else if (GetTickCount() - static_cast<DWORD>(GetMessageTime()) <= 3000 &&
+                           !app->isDragging && app->physics.startleMode() == StartleMode::None) {
+                    app->physics.startle(app->input);
+                }
+            }
+            return 0;
+
+        case WM_WTSSESSION_CHANGE:
+            if (app && hwnd == app->hwnd) {
+                switch (wParam) {
+                    case WTS_SESSION_LOCK:
+                    case WTS_SESSION_LOGOFF:
+                    case WTS_CONSOLE_DISCONNECT:
+                    case WTS_REMOTE_DISCONNECT:
+                        app->sessionUnavailable = true;
+                        break;
+                    case WTS_SESSION_UNLOCK:
+                    case WTS_SESSION_LOGON:
+                    case WTS_CONSOLE_CONNECT:
+                    case WTS_REMOTE_CONNECT:
+                        app->sessionUnavailable = false;
+                        break;
+                }
+                refreshNotifications(*app);
+            }
+            return 0;
+
+        case WM_POWERBROADCAST:
+            if (app && hwnd == app->hwnd) {
+                if (wParam == PBT_APMSUSPEND) app->suspended = true;
+                if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND ||
+                    wParam == PBT_APMRESUMECRITICAL) app->suspended = false;
+                refreshNotifications(*app);
+            }
+            return TRUE;
 
         case WM_SETCURSOR:
             if (LOWORD(lParam) == HTCLIENT) {
@@ -706,6 +803,9 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (hwnd == (app ? app->hwnd : nullptr)) {
                 KillTimer(hwnd, TIMER_RENDER);
                 if (app) {
+                    KillTimer(hwnd, TIMER_NOTIFICATIONS);
+                    if (app->sessionEventsRegistered) WTSUnRegisterSessionNotification(hwnd);
+                    app->notifications.stop();
                     Shell_NotifyIconW(NIM_DELETE, &app->nid);
                     if (app->menuOwnerHwnd) {
                         UnregisterHotKey(app->menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID);
@@ -822,6 +922,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
 
     ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);
+    app.sessionEventsRegistered = WTSRegisterSessionNotification(app.hwnd, NOTIFY_FOR_THIS_SESSION) != FALSE;
+    if (app.settings.notificationReactions) {
+        // Saved opt-in can restore access silently, including after boot or unlock.
+        SetTimer(app.hwnd, TIMER_NOTIFICATIONS, 1000, nullptr);
+        refreshNotifications(app);
+    }
     app.lastTickTime = nowSeconds();
     tickAndRender(app);
     SetTimer(app.hwnd, TIMER_RENDER, 16, nullptr);

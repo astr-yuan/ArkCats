@@ -38,6 +38,7 @@ struct CatSettings {
     bool showKeyBadges = true;
     bool footEasterEgg = true;
     bool petInteraction = true;
+    bool notificationReactions = false;
     bool fullClickThrough = false;
     bool alwaysOnTop = true;
     float scale = 1.0f;
@@ -51,13 +52,15 @@ struct CatSettings {
         HKEY hKey = nullptr;
         if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\KuroCat", 0, KEY_READ, &hKey) != ERROR_SUCCESS) return;
         auto readDword = [&](const wchar_t* name, DWORD defVal) -> DWORD {
-            DWORD val = defVal, sz = sizeof(val);
-            if (RegQueryValueExW(hKey, name, nullptr, nullptr, (LPBYTE)&val, &sz) == ERROR_SUCCESS) return val;
+            DWORD val = defVal, sz = sizeof(val), type = 0;
+            if (RegQueryValueExW(hKey, name, nullptr, &type, (LPBYTE)&val, &sz) == ERROR_SUCCESS
+                && type == REG_DWORD && sz == sizeof(val)) return val;
             return defVal;
         };
         showKeyBadges    = readDword(L"ShowKeyBadges", 1) != 0;
         footEasterEgg    = readDword(L"FootEasterEgg", 1) != 0;
         petInteraction   = readDword(L"PetInteraction", 1) != 0;
+        notificationReactions = readDword(L"NotificationReactions", 0) == 1;
         fullClickThrough = readDword(L"FullClickThrough", 0) != 0;
         alwaysOnTop      = readDword(L"AlwaysOnTop", 1) != 0;
         scale            = std::clamp((float)readDword(L"ScalePct", 100) / 100.0f, 0.5f, 2.0f);
@@ -82,6 +85,7 @@ struct CatSettings {
         writeDword(L"ShowKeyBadges", showKeyBadges ? 1 : 0);
         writeDword(L"FootEasterEgg", footEasterEgg ? 1 : 0);
         writeDword(L"PetInteraction", petInteraction ? 1 : 0);
+        writeDword(L"NotificationReactions", notificationReactions ? 1 : 0);
         writeDword(L"FullClickThrough", fullClickThrough ? 1 : 0);
         writeDword(L"AlwaysOnTop", alwaysOnTop ? 1 : 0);
         writeDword(L"ScalePct", (DWORD)(scale * 100.0f + 0.5f));
@@ -142,8 +146,7 @@ struct PurrSparkle {
     bool isSleepZ = false;
 };
 
-class CatPhysics {
-public:
+struct CatPose {
     static constexpr float CanvasWidth  = 360.0f;
     static constexpr float CanvasHeight = 320.0f;
     static constexpr Pt SeatAnchor      = { 184.0f, 226.0f };
@@ -170,25 +173,21 @@ public:
     Spring2D eyeGaze{{0.0f, 0.0f}};
     Spring1D pupilScale{1.0f};
     Spring1D huntIntensity{0.0f};
-    Spring2D mouseOffset{{0.0f, 0.0f}};
-    Spring1D mousePressLeft{0.0f};
-    Spring1D mousePressRight{0.0f};
 
     bool leftPawOnMouse = false;
     bool leftPawTyping = false;
     bool rightPawTyping = false;
-
-    std::unordered_map<PhysicalKey, float> keyGlow;
-    std::vector<FloatingKeycap> floatingKeycaps;
-    std::vector<PurrSparkle> sparkles;
 
     float time = 0.0f;
     float tailPhase = 0.0f;
 
     float petHeadIntensity = 0.0f;
     float petBodyIntensity = 0.0f;
-    int totalPetSessions = 0;
     float sleepiness = 0.0f;
+    float jumpHeight = 0.0f;
+    float tailLiftDegrees = 0.0f;
+    float alertPupils = 0.0f;
+    float sleepZOpacity = 1.0f;
 
     float effectiveEyeClosure() const {
         float petClose = std::max(petHeadIntensity, petBodyIntensity * 0.62f);
@@ -198,6 +197,168 @@ public:
 
     bool isHappyClosedEyes() const { return petHeadIntensity > 0.45f; }
     bool isBlissfulSquint() const { return petBodyIntensity > 0.35f && !isHappyClosedEyes(); }
+
+protected:
+    float blinkProgress_ = 0.0f;
+};
+
+enum class StartleMode { None, Idle, Sleep, Typing, Mouse };
+
+// Only the displayed joints are blended. The simulation, input and key effects
+// continue to update even while the paws briefly hover over the keyboard.
+class StartleReaction {
+public:
+    StartleMode mode() const { return mode_; }
+    const CatPose& displayPose(const CatPose& live) const {
+        return mode_ == StartleMode::None ? live : pose_;
+    }
+
+    StartleMode begin(const CatPose& live, const InputEngine& input, double now) {
+        if (mode_ != StartleMode::None) return StartleMode::None;
+        double lastMouse = std::max(input.lastMouseMoveTime, input.lastMouseClickTime);
+        auto recent = [now](double stamp, double window) {
+            return stamp > 0.0 && now - stamp < window;
+        };
+        bool key = !input.activeKeys.empty() || recent(input.lastKeyActivityTime, 0.65);
+        bool mouse = buttonHeld(input) || recent(lastMouse, 0.75);
+        if (key && (!mouse || input.lastKeyActivityTime >= lastMouse)) mode_ = StartleMode::Typing;
+        else if (mouse) mode_ = StartleMode::Mouse;
+        else if (live.sleepiness > 0.45f) mode_ = StartleMode::Sleep;
+        else mode_ = StartleMode::Idle;
+
+        elapsed_ = 0.f;
+        pose_ = live;
+        // Look away from the current cursor briefly, whichever side it was on.
+        glanceSide_ = live.headYaw.value > 0.15f ? -1.f : 1.f;
+        if (mode_ == StartleMode::Typing) {
+            leftHover_ = hoverTarget(live.leftPaw, live.leftPawTyping, PhysicalKey::J, -3.f, 29.f);
+            rightHover_ = hoverTarget(live.rightPaw, live.rightPawTyping, PhysicalKey::D, 3.f, 26.f);
+        }
+        return mode_;
+    }
+
+    void advance(float dt, const CatPose& live, const InputEngine& input) {
+        if (mode_ == StartleMode::None) return;
+        elapsed_ += dt;
+        // No keyboard history, particle list, or runtime input is copied.
+        pose_ = live;
+        switch (mode_) {
+        case StartleMode::Idle: {
+            float perk = pulse(0.f,.15f,.44f,1.21f);
+            float dip = pulse(0.f,.06f,.07f,.15f);
+            float bounce = pulse(.06f,.22f,.23f,.45f);
+            float land = pulse(.31f,.45f,.47f,.69f);
+            look(perk,.32f,-.38f,-.06f,-3.f);
+            pose_.headOffsetY.value += 3.f*(dip+land);
+            pose_.bodySquash.value += -.07f*dip+.035f*bounce-.06f*land;
+            pose_.jumpHeight = 13.f*bounce;
+            pose_.tailLiftDegrees = 11.f*pulse(.04f,.24f,.35f,.90f);
+            pose_.alertPupils = .32f*perk;
+            finishAfter(1.21f);
+            break;
+        }
+        case StartleMode::Sleep: {
+            float wake = pulse(.095f,.28f,1.f,2.58f);
+            float open = pulse(.095f,.22f,1.f,2.47f);
+            look(wake,.32f,-.42f,-.055f,-4.f);
+            pose_.headOffsetY.value -= 6.f*pulse(.12f,.30f,.31f,.55f);
+            toward(pose_.bodySquash.value,1.02f,wake);
+            pose_.sleepiness *= 1.f-open;
+            pose_.alertPupils = .97f*open;
+            pose_.tailLiftDegrees = 4.f*wake;
+            pose_.sleepZOpacity = 1.f-pulse(.085f,.28f,2.12f,2.67f);
+            finishAfter(2.67f);
+            break;
+        }
+        case StartleMode::Typing: {
+            float pause = pulse(0.f,.14f,.74f,1.01f);
+            float lift = pulse(.025f,.24f,.64f,1.05f);
+            look(lift,.28f,-.52f,.025f,-4.f);
+            if (!(live.leftPawOnMouse && buttonHeld(input))) {
+                toward(pose_.leftPaw, leftHover_, pause);
+            }
+            toward(pose_.rightPaw,rightHover_,pause);
+            pose_.tailLiftDegrees = 5.f*lift;
+            pose_.alertPupils = .41f*lift;
+            finishAfter(1.05f);
+            break;
+        }
+        case StartleMode::Mouse: {
+            float glance = pulse(.035f,.31f,.75f,1.47f);
+            float eyes = pulse(0.f,.16f,.67f,1.17f);
+            float tuck = pulse(.045f,.19f,.50f,.97f);
+            look(glance,.91f*glanceSide_,-.43f,.10f*glanceSide_,-3.2f);
+            pose_.eyeGaze = live.eyeGaze;
+            toward(pose_.eyeGaze,{.95f*glanceSide_,-.5f},eyes);
+            // The paw on the mouse stays in contact. A paw assigned a real key
+            // keeps tracking that key even in a mixed mouse/keyboard gesture.
+            if (!live.rightPawTyping) {
+                pose_.rightPaw.x.value += 6.f*tuck;
+                pose_.rightPaw.y.value -= 20.f*tuck;
+            }
+            pose_.tailLiftDegrees = 4.5f*glance;
+            pose_.alertPupils = .33f*eyes;
+            finishAfter(1.47f);
+            break;
+        }
+        case StartleMode::None: break;
+        }
+    }
+
+private:
+    StartleMode mode_ = StartleMode::None;
+    CatPose pose_;
+    Pt leftHover_{}, rightHover_{};
+    float elapsed_ = 0.f;
+    float glanceSide_ = 1.f;
+
+    static bool buttonHeld(const InputEngine& input) {
+        return input.leftMouseDown || input.rightMouseDown || input.otherMouseDown;
+    }
+    static Pt hoverTarget(const Spring2D& paw, bool typing, PhysicalKey fallback, float dx, float lift) {
+        Pt key = typing ? Pt{paw.x.target,paw.y.target} : KeyboardLayout::canvasPointForKey(fallback);
+        return {key.x+dx, key.y-lift};
+    }
+    static void toward(float& value, float target, float weight) { value += (target-value)*weight; }
+    static void toward(Spring2D& joint, Pt target, float weight) {
+        toward(joint.x.value,target.x,weight);
+        toward(joint.y.value,target.y,weight);
+    }
+    void look(float weight, float yaw, float pitch, float tilt, float height) {
+        toward(pose_.headYaw.value,yaw,weight);
+        toward(pose_.headPitch.value,pitch,weight);
+        toward(pose_.headTilt.value,tilt,weight);
+        toward(pose_.headOffsetY.value,height,weight);
+        toward(pose_.earFold.value,-.26f,weight);
+        toward(pose_.eyeGaze,{yaw,pitch},weight);
+    }
+    float ramp(float start, float end) const {
+        float v = std::clamp((elapsed_-start)/(end-start),0.f,1.f);
+        return v*v*(3.f-2.f*v);
+    }
+    float pulse(float start, float peak, float release, float end) const {
+        return ramp(start,peak)*(1.f-ramp(release,end));
+    }
+    void finishAfter(float duration) {
+        if (elapsed_ >= duration) mode_ = StartleMode::None;
+    }
+};
+
+class CatPhysics : public CatPose {
+public:
+    Spring2D mouseOffset{{0.0f, 0.0f}};
+    Spring1D mousePressLeft{0.0f};
+    Spring1D mousePressRight{0.0f};
+    std::unordered_map<PhysicalKey, float> keyGlow;
+    std::vector<FloatingKeycap> floatingKeycaps;
+    std::vector<PurrSparkle> sparkles;
+    int totalPetSessions = 0;
+
+    StartleMode startle(const InputEngine& input) {
+        return reaction_.begin(*this, input, nowSeconds());
+    }
+    StartleMode startleMode() const { return reaction_.mode(); }
+    const CatPose& displayPose() const { return reaction_.displayPose(*this); }
 
     void triggerKeyDown(PhysicalKey key, const CatSettings& settings) {
         double now = nowSeconds();
@@ -563,11 +724,12 @@ public:
             sp.position.y += sp.velocity.y * dt;
             if (sp.age >= sp.lifetime) sparkles.erase(sparkles.begin() + i);
         }
+        reaction_.advance(dt, *this, engine);
     }
 
 private:
+    StartleReaction reaction_;
     float nextBlinkTime_ = 3.2f;
-    float blinkProgress_ = 0.0f;
     bool isBlinking_ = false;
     float blinkTimer_ = 0.0f;
 

@@ -22,7 +22,9 @@ class CatRenderer {
 public:
     static constexpr float RadToDeg = 57.2957795f;
 
-    static CatHitZone hitTest(Pt p, const CatPhysics& physics) {
+    static CatHitZone hitTest(Pt p, const CatPhysics& simulation) {
+        const CatPose& physics = simulation.displayPose();
+        p.y += physics.jumpHeight;
         float cx = CatPhysics::SeatAnchor.x + physics.bodyShiftX.value;
         float breath = std::sin(physics.time * 2.1f) * 1.6f;
         Pt headCenter = { cx + physics.bodyTilt.value * 36.0f + physics.headYaw.value * 7.5f,
@@ -39,8 +41,9 @@ public:
         return CatHitZone::None;
     }
 
-    static void draw(Gdiplus::Graphics& g, const CatPhysics& physics, const CatSettings& settings) {
+    static void draw(Gdiplus::Graphics& g, const CatPhysics& simulation, const CatSettings& settings) {
         using namespace Gdiplus;
+        const CatPose& physics = simulation.displayPose();
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
         g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
@@ -55,13 +58,28 @@ public:
         };
 
         // 1. Mini White Mouse (facing cat)
-        drawMouse(g, physics, settings.keyboardTheme);
+        drawMouse(g, simulation, settings.keyboardTheme);
 
         // 2. Mini 65% Mechanical Keyboard (facing cat) + Backlit Glow
-        drawKeyboard(g, physics, settings.keyboardTheme, settings.eyeTheme);
+        drawKeyboard(g, simulation, settings.keyboardTheme, settings.eyeTheme);
+
+        GraphicsState beforeJump{};
+        if (physics.jumpHeight > 0.f) {
+            beforeJump = g.Save();
+            g.TranslateTransform(0.f, -physics.jumpHeight);
+        }
 
         // 3. Tail
-        drawTail(g, seatX, seatY, physics, settings.coatTheme);
+        if (physics.tailLiftDegrees > 0.f) {
+            GraphicsState beforeLift = g.Save();
+            g.TranslateTransform(seatX + 34.f, seatY - 8.f);
+            g.RotateTransform(-physics.tailLiftDegrees);
+            g.TranslateTransform(-seatX - 34.f, -seatY + 8.f);
+            drawTail(g, seatX, seatY, physics, settings.coatTheme);
+            g.Restore(beforeLift);
+        } else {
+            drawTail(g, seatX, seatY, physics, settings.coatTheme);
+        }
 
         // 4. 3D-Projected Ears (behind crown silhouette)
         drawEarsLayer(g, headCenter, physics, settings.coatTheme);
@@ -82,14 +100,15 @@ public:
 
         // 8. Front Paws (Idle Sitting & Dynamic Reaching)
         drawFrontPaws(g, seatX, seatY, breath, physics, settings.coatTheme);
+        if (physics.jumpHeight > 0.f) g.Restore(beforeJump);
 
         // 9. Floating Keycap Badges
         if (settings.showKeyBadges) {
-            drawFloatingKeycaps(g, physics);
+            drawFloatingKeycaps(g, simulation);
         }
 
         // 10. Subtle Petting Sparkles & Sleep Z
-        drawSparkles(g, physics, settings.eyeTheme);
+        drawSparkles(g, simulation, settings.eyeTheme, physics.sleepZOpacity);
     }
 
 private:
@@ -110,7 +129,7 @@ private:
     static Gdiplus::Color pawColor(CatCoatTheme c) { return patterned(c) ? rgb(0xF2EEE4) : (c == CatCoatTheme::Siamese ? siamesePoint() : catBlack()); }
     static Gdiplus::Color earTailColor(CatCoatTheme c) { return c == CatCoatTheme::Siamese ? siamesePoint() : limbColor(c); }
     static Gdiplus::Color creaseColor(CatCoatTheme c, BYTE a = 255) { return patterned(c) ? rgb(0x8B8171, (BYTE)(a*0.60f)) : contourMint(a); }
-    static Gdiplus::PointF coatMarkPoint(CoatPoint p, bool headSurface, bool skull, CatCoatTheme coat, float seatX, float seatY, Pt head, const CatPhysics& physics) {
+    static Gdiplus::PointF coatMarkPoint(CoatPoint p, bool headSurface, bool skull, CatCoatTheme coat, float seatX, float seatY, Pt head, const CatPose& physics) {
         if (headSurface) {
             float depth=coat==CatCoatTheme::OrangeWhite ? 29.6f*std::sqrt(std::max(0.0f,1-p.x*p.x/(46*46)-p.y*p.y/(40*40))) : 27.5f;
             Pt q=skull ? Pt{p.x,p.y} : projectHead3D(p.x,p.y,depth,physics.headYaw.value*0.50f,physics.headPitch.value*0.36f);
@@ -121,7 +140,7 @@ private:
         float c = std::cos(physics.bodyTilt.value), s = std::sin(physics.bodyTilt.value);
         return {seatX+p.x*sx*c-p.y*sy*s, seatY+p.x*sx*s+p.y*sy*c};
     }
-    static void drawCoatMarks(Gdiplus::Graphics& g, float seatX, float seatY, Pt head, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawCoatMarks(Gdiplus::Graphics& g, float seatX, float seatY, Pt head, const CatPose& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         const auto& marks = coat == CatCoatTheme::Shorthair ? shorthairMarks() : orangeWhiteMarks();
         for (const auto& mark : marks) {
@@ -354,7 +373,7 @@ private:
 
     // MARK: - Tail
 
-    static void drawTwinTails(Gdiplus::Graphics& g, float seatX, float seatY, const CatPhysics& physics) {
+    static void drawTwinTails(Gdiplus::Graphics& g, float seatX, float seatY, const CatPose& physics) {
         using namespace Gdiplus;
         float phase = physics.tailPhase;
         float hunt = std::clamp(physics.huntIntensity.value, 0.0f, 1.0f);
@@ -395,7 +414,7 @@ private:
         }
     }
 
-    static void drawTail(Gdiplus::Graphics& g, float seatX, float seatY, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawTail(Gdiplus::Graphics& g, float seatX, float seatY, const CatPose& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         if (coat == CatCoatTheme::SapphireTwinTail) {
             drawTwinTails(g, seatX, seatY, physics);
@@ -437,7 +456,7 @@ private:
 
     // MARK: - 3D-Projected Ears
 
-    static void drawEarsLayer(Gdiplus::Graphics& g, Pt center, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawEarsLayer(Gdiplus::Graphics& g, Pt center, const CatPose& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         GraphicsState st = g.Save();
         g.TranslateTransform(center.x, center.y);
@@ -479,7 +498,7 @@ private:
 
     // MARK: - Unified C1-Continuous Cat Silhouette (+ Siamese 2.5D Face Mask)
 
-    static void drawUnifiedSilhouette(Gdiplus::Graphics& g, float seatX, float seatY, Pt headCenter, float breath, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawUnifiedSilhouette(Gdiplus::Graphics& g, float seatX, float seatY, Pt headCenter, float breath, const CatPose& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         float yaw = physics.headYaw.value;
         float pitch = physics.headPitch.value;
@@ -597,7 +616,7 @@ private:
 
     // MARK: - 3rd Key Hind Foot
 
-    static void drawHindFoot(Gdiplus::Graphics& g, float seatX, float seatY, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawHindFoot(Gdiplus::Graphics& g, float seatX, float seatY, const CatPose& physics, CatCoatTheme coat) {
         Pt hip = { seatX + 26.0f, seatY + 2.0f };
         Pt target = physics.hindFoot.point();
         Pt mid = { (hip.x + target.x) * 0.5f + 10.0f, (hip.y + target.y) * 0.5f - 8.0f };
@@ -606,7 +625,7 @@ private:
 
     // MARK: - 2.5D Eyes & Whiskers
 
-    static void drawSapphireBow(Gdiplus::Graphics& g, float seatX, Pt head, const CatPhysics& physics) {
+    static void drawSapphireBow(Gdiplus::Graphics& g, float seatX, Pt head, const CatPose& physics) {
         using namespace Gdiplus;
         GraphicsState state = g.Save();
         float yaw = physics.headYaw.value;
@@ -664,7 +683,7 @@ private:
         g.Restore(state);
     }
 
-    static void drawHeadFeatures(Gdiplus::Graphics& g, Pt center, const CatPhysics& physics, EyeColorTheme eyeTheme, CatCoatTheme coat) {
+    static void drawHeadFeatures(Gdiplus::Graphics& g, Pt center, const CatPose& physics, EyeColorTheme eyeTheme, CatCoatTheme coat) {
         using namespace Gdiplus;
         GraphicsState st = g.Save();
         g.TranslateTransform(center.x, center.y);
@@ -679,7 +698,7 @@ private:
         g.Restore(st);
     }
 
-    static void drawEye3D(Gdiplus::Graphics& g, bool isLeft, float yawRad, float pitchRad, const CatPhysics& physics, EyeColorTheme eyeTheme, CatCoatTheme coat) {
+    static void drawEye3D(Gdiplus::Graphics& g, bool isLeft, float yawRad, float pitchRad, const CatPose& physics, EyeColorTheme eyeTheme, CatCoatTheme coat) {
         using namespace Gdiplus;
         float sign = isLeft ? -1.0f : 1.0f;
         Color eyeCol = eyePrimary(eyeTheme);
@@ -716,7 +735,7 @@ private:
             return;
         }
 
-        float hunt = std::clamp(physics.huntIntensity.value, 0.0f, 1.0f);
+        float hunt = std::clamp(std::max(physics.huntIntensity.value, physics.alertPupils), 0.0f, 1.0f);
         g.RotateTransform(sign * (0.06f * (1.0f - hunt * 0.6f)) * RadToDeg);
 
         float rx = 12.0f + hunt * 1.1f;
@@ -776,7 +795,7 @@ private:
         g.Restore(st);
     }
 
-    static void drawWhiskers3D(Gdiplus::Graphics& g, float yawRad, float pitchRad, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawWhiskers3D(Gdiplus::Graphics& g, float yawRad, float pitchRad, const CatPose& physics, CatCoatTheme coat) {
         using namespace Gdiplus;
         float wiggle = std::sin(physics.time * 4.5f) * (std::max(physics.petHeadIntensity, physics.petBodyIntensity) * 1.2f);
         Pen pen(coat == CatCoatTheme::Siamese ? siameseWhisker() : (patterned(coat) ? rgb(0x8D8170,174) : whiskerWhite()), 1.05f);
@@ -802,7 +821,7 @@ private:
 
     // MARK: - Front Paws
 
-    static void drawFrontPaws(Gdiplus::Graphics& g, float seatX, float seatY, float breath, const CatPhysics& physics, CatCoatTheme coat) {
+    static void drawFrontPaws(Gdiplus::Graphics& g, float seatX, float seatY, float breath, const CatPose& physics, CatCoatTheme coat) {
         Pt lPos = physics.leftPaw.point();
         Pt rPos = physics.rightPaw.point();
 
@@ -1030,14 +1049,14 @@ private:
 
     // MARK: - Petting Sparkles & Sleep Z
 
-    static void drawSparkles(Gdiplus::Graphics& g, const CatPhysics& physics, EyeColorTheme eyeTheme) {
+    static void drawSparkles(Gdiplus::Graphics& g, const CatPhysics& physics, EyeColorTheme eyeTheme, float sleepZOpacity) {
         using namespace Gdiplus;
         Color baseCol = eyePrimary(eyeTheme);
         FontFamily ff(L"Segoe UI");
 
         for (const auto& sp : physics.sparkles) {
             float p = std::min(1.0f, sp.age / sp.lifetime);
-            BYTE a = (BYTE)(std::sin(p * 3.14159f) * 215.0f);
+            BYTE a = (BYTE)(std::sin(p * 3.14159f) * 215.0f * (sp.isSleepZ ? sleepZOpacity : 1.f));
             if (a < 4) continue;
 
             Color c(a, baseCol.GetR(), baseCol.GetG(), baseCol.GetB());
