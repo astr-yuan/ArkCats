@@ -1,63 +1,74 @@
-# Miss. Christine
+# ArkCats
 
-Miss. Christine 是一只坐在键盘前的 Windows 桌宠。她有两条黑色尾巴、蓝眼黑瞳，红丝带领结中央镶着一颗蓝宝石。移动鼠标时，她会跟着转头。打字时，她会伸爪敲键，闲置一会儿又会打瞌睡。
+ArkCats 把六只猫放进同一个 Windows 桌宠。首次启动是戴蓝宝石红领结的双尾黑猫 **Miss. Christine**。右键小猫或点击托盘图标，打开 **「皮肤选择」** 即可当场换猫。下次启动时会恢复上一次的选择。
 
-![Miss. Christine 在键盘前转头、敲键、摆出捕猎表情，又在被摸头时眯起眼睛](assets/preview.gif)
+![ArkCats 中六款皮肤的实际绘制效果](assets/skins.png)
 
-## 下载与运行
+## 下载与启动
 
-适用于 Windows 10（1607 及以上）和 Windows 11 x64。通知组件需要 .NET Framework 4.8 或 4.8.1。已在 Windows 11 25H2、2560 × 1440 分辨率、150% 显示缩放下验证。
+1. 从 [GitHub Releases 下载 ArkCats-Windows-x64.zip](https://github.com/astr-yuan/ArkCats/releases/latest/download/ArkCats-Windows-x64.zip)。
+2. 完整解压到常用文件夹，让 `ArkCats.exe` 与 `ArkCatsNotifications.exe` 位于同一目录，双击 **`ArkCats.exe`**。
+3. 拖动小猫可以摆放位置。右键菜单可调整尺寸、设置鼠标穿透、开启通知反应和退出。皮肤共用这些设置。
 
-1. 下载 [Windows x64 压缩包](https://github.com/astr-yuan/Miss-Christine/releases/latest/download/Miss-Christine-Windows-x64.zip)。版本记录见 [最新发行版](https://github.com/astr-yuan/Miss-Christine/releases/latest)。
-2. 将整个 ZIP 解压到准备长期存放的文件夹，保留 `KuroCat.exe` 和 `ChristineNotifications.exe` 在同一目录。双击 `KuroCat.exe` 即可启动。小猫会出现在桌面，任务栏通知区域也会出现猫咪图标。
-3. 拖动小猫可以移动位置。右键小猫或点击托盘图标打开菜单，选择「退出 KuroCat」即可关闭。
+## 皮肤与动作
 
-从旧版升级时，先在托盘中退出旧版，再把新版解压到原目录。已有的皮肤、位置和尺寸设置会沿用。
-
-## 收到 Windows 通知时
-
-右键小猫或点击托盘猫图标，勾选 **「收到 Windows 通知时做出反应」**，并在系统询问时允许通知访问。首次使用时此功能默认关闭。再次点击同一项即可关闭。
-
-当任意应用在 Windows 通知中心添加一条通知，小猫会根据当时的姿势作出反应。
-
-| 当时的状态 | 小猫的动作 |
+| 菜单中的名称 | 外观与互动 |
 | --- | --- |
-| 待机 | 耳朵竖起，身子轻弹，两条尾巴一挑。 |
-| 打瞌睡 | 慢半拍睁圆眼睛、抬起头，再慢慢眯回去。 |
-| 敲键盘 | 两只爪子在键面上方停一下，然后接着敲。 |
-| 用鼠标 | 一只爪子搭着鼠标，另一只轻缩，回头张望后继续追光标。 |
+| Miss. Christine | 两条黑尾、蓝眼黑瞳、红色蓝宝石领结。 |
+| 望的丑猫 | 围棋棋盒化身。半黑半白的面具配反色瞳孔，颈前垂着金坠，前臂、脊背和长尾带有金纹。按回车或选择「演示落子」，它会伸爪，在小棋盘的交点上轮流落黑子和白子。 |
+| 经典小黑猫（KuroCat） | 亮绿眼、单尾的经典黑猫。 |
+| 挖煤暹罗猫（KuroCat） | 蓝眼、深色面罩与四肢。 |
+| 美短（银虎斑加白）（KuroCat） | 银灰虎斑与白色胸腹。 |
+| 橘白猫（KuroCat） | 暖橘斑纹和白色胸腹。 |
+
+六款皮肤都会追随光标、敲迷你键盘、在被轻抚时眯眼，闲置后打瞌睡。菜单里的「演示打字动画」可以直接预览敲键；同时按住三个支持的按键还可触发伸后脚的彩蛋。
 
 <details>
-<summary>查看四种动作的同步演示</summary>
+<summary>查看望的丑猫落子、敲键和惊醒的动画</summary>
 
-![同一条模拟通知到达时，Miss. Christine 在四种姿势下的反应](assets/notification-reactions.webp)
+![望的丑猫从待机到黑白落子、摸头和惊醒的动作](assets/wang-go.webp)
 
 </details>
 
-开启时已有的通知会被跳过，五秒内连续到达的多条通知合并为一次动作。程序在本机定期比较通知编号与创建时间，消息标题、正文和发送者信息均无需读取。要体验一次，可以让平时就会出现在通知中心的应用产生一条新通知，并保留几秒。在 Windows 11 上按 `Win + N` 可以查看通知中心。
+<details>
+<summary>查看 Miss. Christine 的日常动作</summary>
 
-菜单显示「已就绪，等待新通知」时，监听已开始。如果 Windows 拒绝访问，可以在系统设置中允许通知访问，再从小猫菜单选择「重新连接并检查通知权限」。
+![Miss. Christine 转头、敲键和被摸头时的动作](assets/preview.gif)
 
-## 与小猫互动
+</details>
 
-- 移动光标让小猫转头，快速移动会触发捕猎表情。用光标轻轻来回摸头或摸背，小猫会眯眼。
-- 在菜单里选择「演示打字动画」即可看她敲键。开启「3 键同时按『用脚按』彩蛋」后，同时按住三个支持的键可以看到她伸出后脚。
-- 「尺寸大小」提供五档缩放。「猫咪皮肤」可切回 Miss. Christine 或其他毛色。「重置位置到右下角」可将小猫移回屏幕工作区。
-- 「完全鼠标穿透」让鼠标直接操作小猫下方的窗口。用 `Ctrl + Alt + Shift + P` 或托盘菜单可切换穿透。
+## Windows 通知反应
 
-程序通过 Windows Raw Input 在本机接收键鼠活动，其他窗口获得焦点时小猫也能响应。按键标签会短暂显示在桌面，可在菜单里关闭「显示按键气泡」。按键状态和本次运行的击键统计保存在内存中，退出后清空。外观与交互偏好保存在当前 Windows 用户的设置里。
+勾选 **「收到 Windows 通知时做出反应」**，并在 Windows 询问时允许通知访问。菜单显示「已就绪，等待新通知」后，任何应用在 Windows 通知中心新增一条通知，都可以让当前的小猫受惊。待机时它会轻跳，瞌睡时惊醒，打字时双爪悬停，用鼠标时回头张望。切换皮肤后，通知开关继续生效。
 
-## 从源码构建
+程序在本机比较通知编号与创建时间。开启前的旧通知会跳过，五秒内连续到达的通知合并为一次动作。全新安装时此功能默认关闭。需要重新授权时，可在 Windows 设置中允许通知访问，再点猫咪菜单里的「重新连接并检查通知权限」。
 
-在已配置 x64 MinGW-w64（含 `g++` 和 `windres`）的终端，或 Visual Studio 的 x64 Native Tools 命令提示符中，从仓库根目录运行以下命令。
+<details>
+<summary>查看四种通知动作的同步演示</summary>
+
+![同一条模拟通知到达时四种姿势的反应](assets/notification-reactions.webp)
+
+</details>
+
+## 从旧版升级
+
+先从托盘退出旧的 Miss. Christine 或望的丑猫，再启动 `ArkCats.exe`。ArkCats 首次运行时会读取旧版的通用偏好，包括位置、尺寸、键盘配色和通知开关。如果两个独立版都有设置，优先采用 Miss. Christine 的设置。首次显示 Miss. Christine，之后使用 ArkCats 自己保存的皮肤和偏好。
+
+原来开启了开机启动的用户，如果将新版解压在同一个旧版目录，可在托盘菜单中选择「将此目录旧版的开机启动迁移到 ArkCats」。如果换了安装目录，可从原应用关闭开机启动，再从 ArkCats 开启。通知助手随应用改名，Windows 可能需要为它重新授权。
+
+## 本地运行与构建
+
+适用于 Windows 10（1607 及以上）和 Windows 11 x64。通知助手需要 .NET Framework 4.8 或 4.8.1。在 x64 MinGW-w64 环境或 Visual Studio 的 x64 本机工具命令提示符中，从仓库根目录执行：
 
 ```bat
 cd windows
 build.bat
 ```
 
-构建会同时生成 `windows/KuroCat.exe` 和 `windows/ChristineNotifications.exe`。通知组件使用 Windows 的 .NET Framework 4.8 和 WinRT 通知接口。工程也支持 CMake 3.20 及以上版本。
+构建产物为 `windows/ArkCats.exe` 和 `windows/ArkCatsNotifications.exe`。也支持 CMake 3.20 及以上版本。
+
+ArkCats 使用 Windows Raw Input 接收键鼠活动，击键计数保存在内存中，退出时清空。按键气泡可以在菜单中关闭。完全鼠标穿透的默认快捷键是 `Ctrl + Alt + Shift + P`，也可以从托盘操作。
 
 ## 来源与许可
 
-本项目基于 chanke17 的 KuroCat Windows 版，沿用 Win32 与 GDI+ 实时绘制，加入双尾蓝宝石皮肤，并改进了 Windows 显示缩放、交互和构建。本项目采用 MIT 许可证，并保留上游版权声明。[上游源码版本](https://github.com/chanke17/KuroCat/tree/5fbe37930b07ad01f3c004eae47eaa4d1339ebfe) · [MIT 许可证](LICENSE)
+桌宠基于 chanke17 的 KuroCat，沿用 Win32 与 GDI+ 实时绘制。ArkCats 整合了 Miss. Christine、望的丑猫与四款 KuroCat 皮肤，并保留上游 MIT 版权声明。[KuroCat 上游源码](https://github.com/chanke17/KuroCat/tree/5fbe37930b07ad01f3c004eae47eaa4d1339ebfe) · [代码许可证](LICENSE)

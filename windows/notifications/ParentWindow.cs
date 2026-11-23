@@ -47,7 +47,7 @@ internal sealed class ParentWindow : IDisposable
             if (owner.HasExited || GetWindowThreadProcessId(window, out pid) == 0 || pid != (uint)owner.Id)
                 return false;
             var name = new StringBuilder(80);
-            return GetClassName(window, name, name.Capacity) != 0 && name.ToString() == "KuroCatOverlayWindowClass";
+            return GetClassName(window, name, name.Capacity) != 0 && name.ToString() == "ArkCatsOverlayWindowClass";
         }
     }
 

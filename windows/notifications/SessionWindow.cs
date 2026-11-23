@@ -30,7 +30,7 @@ internal sealed class SessionWindow : NativeWindow, IDisposable
 
     public SessionWindow()
     {
-        CreateHandle(new CreateParams { Caption = "ChristineNotifications", Style = unchecked((int)0x80000000) });
+        CreateHandle(new CreateParams { Caption = "ArkCatsNotifications", Style = unchecked((int)0x80000000) });
         registered = WTSRegisterSessionNotification(Handle, 0); // NOTIFY_FOR_THIS_SESSION
     }
 

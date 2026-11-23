@@ -9,11 +9,14 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <objidl.h>
 #include <gdiplus.h>
 #include <string>
+#include <string_view>
 #include <cmath>
 #include <algorithm>
+#include <iterator>
 #include "KeyMap.hpp"
 #include "InputEngine.hpp"
 #include "CatPhysics.hpp"
@@ -28,7 +31,7 @@
 
 namespace {
 
-constexpr wchar_t kPetName[] = L"Miss. Christine";
+constexpr wchar_t kAppName[] = L"ArkCats";
 constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr UINT WM_WAKE_EXISTING = WM_APP + 2;
 constexpr UINT_PTR TIMER_RENDER = 1;
@@ -41,6 +44,7 @@ enum MenuCmd : UINT {
     CMD_TOGGLE_CLICKTHROUGH,
     CMD_TOGGLE_TOPMOST,
     CMD_TOGGLE_AUTOSTART,
+    CMD_MIGRATE_AUTOSTART,
     CMD_TOGGLE_BADGES,
     CMD_TOGGLE_FOOT,
     CMD_TOGGLE_PET,
@@ -49,6 +53,7 @@ enum MenuCmd : UINT {
     CMD_COAT_SHORTHAIR,
     CMD_COAT_ORANGE_WHITE,
     CMD_COAT_SAPPHIRE_TWIN_TAIL,
+    CMD_COAT_WANG,
     CMD_KB_MILK,
     CMD_KB_HACKER,
     CMD_KB_RETRO,
@@ -64,6 +69,7 @@ enum MenuCmd : UINT {
     CMD_SCALE_125,
     CMD_SCALE_150,
     CMD_DEMO_BURST,
+    CMD_DEMO_GO_STONE,
     CMD_RESET_POS,
     CMD_QUIT,
     CMD_TOGGLE_NOTIFICATIONS,
@@ -84,6 +90,7 @@ struct AppState {
     bool suspended = false;
     bool requestAccessOnShow = false;
     bool sessionEventsRegistered = false;
+    bool clickHotkeyRegistered = false;
 
     bool isVisible = true;
     bool isDragging = false;
@@ -140,48 +147,137 @@ struct AppState {
 
 AppState* g_app = nullptr;
 
-HICON createCatTrayIcon();
+struct SkinMenuEntry {
+    UINT command;
+    CatCoatTheme coat;
+    const wchar_t* label;
+};
 
-// MARK: - Windows Auto-Start (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
+constexpr SkinMenuEntry skins[] = {
+    {CMD_COAT_SAPPHIRE_TWIN_TAIL, CatCoatTheme::SapphireTwinTail, L"Miss. Christine"},
+    {CMD_COAT_WANG, CatCoatTheme::Wang, L"望的丑猫"},
+    {CMD_COAT_BLACK, CatCoatTheme::ClassicBlack, L"经典小黑猫（KuroCat）"},
+    {CMD_COAT_SIAMESE, CatCoatTheme::Siamese, L"挖煤暹罗猫（KuroCat）"},
+    {CMD_COAT_SHORTHAIR, CatCoatTheme::Shorthair, L"美短（银虎斑加白）（KuroCat）"},
+    {CMD_COAT_ORANGE_WHITE, CatCoatTheme::OrangeWhite, L"橘白猫（KuroCat）"}
+};
 
-std::wstring getCurrentExeQuotedPath() {
-    wchar_t buf[MAX_PATH * 2] = {};
-    DWORD len = GetModuleFileNameW(nullptr, buf, (DWORD)(sizeof(buf) / sizeof(buf[0]) - 1));
-    if (len == 0) return L"";
-    return L"\"" + std::wstring(buf, len) + L"\"";
+HICON createCatTrayIcon(CatCoatTheme coat);
+
+constexpr wchar_t runKeyPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+std::wstring currentExePath() {
+    std::wstring path(32768, L'\0');
+    DWORD n = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (!n || n >= path.size()) return {};
+    path.resize(n);
+    return path;
+}
+
+std::wstring quoted(const std::wstring& path) { return L"\"" + path + L"\""; }
+
+LONG readRunCommand(HKEY key, const wchar_t* name, std::wstring& result) {
+    DWORD bytes = 0;
+    LONG status = RegGetValueW(key, nullptr, name, RRF_RT_REG_SZ, nullptr, nullptr, &bytes);
+    if (status != ERROR_SUCCESS) return status;
+    if (bytes < sizeof(wchar_t) || bytes % sizeof(wchar_t) || bytes > 65536) return ERROR_INVALID_DATA;
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    status = RegGetValueW(key, nullptr, name, RRF_RT_REG_SZ, nullptr, value.data(), &bytes);
+    if (status != ERROR_SUCCESS) return status;
+    value.resize(bytes / sizeof(wchar_t));
+    if (value.empty() || value.back() != L'\0') return ERROR_INVALID_DATA;
+    value.pop_back();
+    if (value.find(L'\0') != std::wstring::npos) return ERROR_INVALID_DATA;
+    result = std::move(value);
+    return ERROR_SUCCESS;
+}
+
+bool commandMatches(const std::wstring& actual, const std::wstring& path) {
+    return !path.empty() && _wcsicmp(actual.c_str(), quoted(path).c_str()) == 0;
 }
 
 bool isAutoStartEnabled() {
-    HKEY hKey = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
-        return false;
-    }
-    DWORD type = 0, size = 0;
-    bool exists = (RegQueryValueExW(hKey, L"KuroCat", nullptr, &type, nullptr, &size) == ERROR_SUCCESS && size > 0);
-    RegCloseKey(hKey);
-    return exists;
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, runKeyPath, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) return false;
+    std::wstring command;
+    bool enabled = readRunCommand(key, kAppName, command) == ERROR_SUCCESS && commandMatches(command, currentExePath());
+    RegCloseKey(key);
+    return enabled;
+}
+
+bool writeRunCommand(HKEY key, const std::wstring& path) {
+    if (path.empty()) return false;
+    std::wstring command = quoted(path);
+    return RegSetValueExW(key, kAppName, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()),
+                         static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
 }
 
 bool setAutoStartEnabled(bool enable) {
-    HKEY hKey = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS) {
-        return false;
-    }
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, runKeyPath, 0, nullptr, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) return false;
     bool ok = false;
-    if (enable) {
-        std::wstring cmd = getCurrentExeQuotedPath();
-        if (!cmd.empty()) {
-            ok = (RegSetValueExW(hKey, L"KuroCat", 0, REG_SZ, (const BYTE*)cmd.c_str(), (DWORD)((cmd.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS);
-        }
-    } else {
-        LSTATUS st = RegDeleteValueW(hKey, L"KuroCat");
-        ok = (st == ERROR_SUCCESS || st == ERROR_FILE_NOT_FOUND);
+    std::wstring path = currentExePath(), old;
+    if (enable) ok = writeRunCommand(key, path);
+    else if (readRunCommand(key, kAppName, old) == ERROR_SUCCESS && commandMatches(old, path)) {
+        ok = RegDeleteValueW(key, kAppName) == ERROR_SUCCESS;
     }
-    RegCloseKey(hKey);
+    RegCloseKey(key);
     return ok;
 }
 
+bool hasLegacyManifest(const std::wstring& path, std::string_view expectedDescription) {
+    HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if (!module) return false;
+    HRSRC res = FindResourceW(module, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(24));
+    HGLOBAL data = res ? LoadResource(module, res) : nullptr;
+    const char* xml = data ? static_cast<const char*>(LockResource(data)) : nullptr;
+    bool matched = xml && std::string_view(xml, SizeofResource(module, res)).find(expectedDescription) != std::string_view::npos;
+    FreeLibrary(module);
+    return matched;
+}
+
+// Only the named legacy entries written by our releases, pointing at a verified
+// sibling executable, are eligible. The menu lets the user explicitly migrate them.
+bool migrateLegacyAutostart(bool apply) {
+    HKEY key = nullptr;
+    REGSAM rights = KEY_QUERY_VALUE | (apply ? KEY_SET_VALUE : 0);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, runKeyPath, 0, rights, &key) != ERROR_SUCCESS) return false;
+    std::wstring path = currentExePath(), existing;
+    auto slash = path.find_last_of(L"\\/");
+    LONG status = readRunCommand(key, kAppName, existing);
+    if (slash == std::wstring::npos || (status != ERROR_FILE_NOT_FOUND &&
+            (status != ERROR_SUCCESS || !commandMatches(existing, path)))) {
+        RegCloseKey(key);
+        return false;
+    }
+    struct LegacyEntry { const wchar_t* name; const char* description; };
+    const LegacyEntry legacy[] = {
+        {L"KuroCat", u8"<description>Miss. Christine Desktop Pet</description>"},
+        {L"WangCat", u8"<description>望的丑猫</description>"}
+    };
+    bool eligible = false, failed = false;
+    for (const auto& entry : legacy) {
+        std::wstring oldCommand;
+        std::wstring oldPath = path.substr(0, slash + 1) + entry.name + L".exe";
+        if (readRunCommand(key, entry.name, oldCommand) != ERROR_SUCCESS || !commandMatches(oldCommand, oldPath) ||
+            !hasLegacyManifest(oldPath, entry.description)) continue;
+        eligible = true;
+        if (!apply) break;
+        if (status == ERROR_FILE_NOT_FOUND) {
+            if (!writeRunCommand(key, path)) { eligible = false; break; }
+            status = ERROR_SUCCESS;
+        }
+        // Recheck the value before removing it in case another installer changed it.
+        if (readRunCommand(key, entry.name, oldCommand) == ERROR_SUCCESS && commandMatches(oldCommand, oldPath))
+            failed |= RegDeleteValueW(key, entry.name) != ERROR_SUCCESS;
+    }
+    RegCloseKey(key);
+    return eligible && !failed;
+}
+
 void showTrayBalloon(AppState& app, const wchar_t* title, const wchar_t* body) {
+    if (app.settings.notificationReactions) return;
     NOTIFYICONDATAW b = app.nid;
     b.uFlags = NIF_INFO;
     b.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
@@ -190,8 +286,25 @@ void showTrayBalloon(AppState& app, const wchar_t* title, const wchar_t* body) {
     Shell_NotifyIconW(NIM_MODIFY, &b);
 }
 
-void registerTrayIcon(AppState& app) {
-    if (!app.trayIcon) app.trayIcon = createCatTrayIcon();
+void toggleFullClickThrough(AppState& app) {
+    app.settings.fullClickThrough = !app.settings.fullClickThrough;
+    app.settings.saveToRegistry();
+    if (app.settings.fullClickThrough) {
+        const wchar_t* body = app.clickHotkeyRegistered
+            ? L"按 Ctrl+Alt+Shift+P 或从 ArkCats 托盘菜单取消。"
+            : L"从 ArkCats 托盘菜单取消，或再次运行 ArkCats.exe。";
+        showTrayBalloon(app, L"ArkCats 已开启鼠标穿透", body);
+    } else {
+        showTrayBalloon(app, L"ArkCats 已关闭鼠标穿透", L"现在可以拖动、摸头或右键打开菜单。");
+    }
+}
+
+void registerTrayIcon(AppState& app, bool update = false) {
+    HICON previous = app.trayIcon;
+    if (update || !app.trayIcon) {
+        HICON next = createCatTrayIcon(app.settings.coatTheme);
+        if (next) app.trayIcon = next;
+    }
     app.nid = {};
     app.nid.cbSize = sizeof(app.nid);
     app.nid.hWnd = app.menuOwnerHwnd ? app.menuOwnerHwnd : app.hwnd;
@@ -199,12 +312,19 @@ void registerTrayIcon(AppState& app) {
     app.nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     app.nid.uCallbackMessage = WM_TRAYICON;
     app.nid.hIcon = app.trayIcon;
-    std::wstring tooltip = std::wstring(kPetName) + L" · 点击打开桌宠菜单";
-    wcscpy_s(app.nid.szTip, tooltip.c_str());
-    Shell_NotifyIconW(NIM_ADD, &app.nid);
+    std::wstring title = kAppName;
+    for (const auto& skin : skins) {
+        if (skin.coat == app.settings.coatTheme) { title += L" · "; title += skin.label; break; }
+    }
+    SetWindowTextW(app.hwnd, title.c_str());
+    SendMessageW(app.hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(app.trayIcon));
+    SendMessageW(app.hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(app.trayIcon));
+    wcsncpy_s(app.nid.szTip, title.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(update ? NIM_MODIFY : NIM_ADD, &app.nid);
+    if (previous && previous != app.trayIcon) DestroyIcon(previous);
 }
 
-HICON createCatTrayIcon() {
+HICON createCatTrayIcon(CatCoatTheme coat) {
     using namespace Gdiplus;
     constexpr int sz = 32;
     Bitmap bmp(sz, sz, PixelFormat32bppPARGB);
@@ -212,25 +332,73 @@ HICON createCatTrayIcon() {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.Clear(Color(0, 0, 0, 0));
 
-    SolidBrush black(Color(255, 22, 22, 26));
-    PointF lEar[3] = { {4, 15}, {6, 3}, {14, 11} };
-    PointF rEar[3] = { {28, 15}, {26, 3}, {18, 11} };
-    g.FillPolygon(&black, lEar, 3);
-    g.FillPolygon(&black, rEar, 3);
-    g.FillEllipse(&black, 4.0f, 8.0f, 24.0f, 21.0f);
+    if (coat == CatCoatTheme::Wang) {
+        SolidBrush ink(Color(255, 38, 37, 44));
+        SolidBrush slate(Color(255, 69, 69, 79));
+        SolidBrush porcelain(Color(255, 248, 246, 237));
+        SolidBrush gold(Color(255, 217, 178, 111));
+        PointF leftEar[] = {{2, 14}, {5, 2}, {14, 8}};
+        PointF rightEar[] = {{18, 8}, {26, 2}, {30, 14}};
+        g.FillPolygon(&slate, leftEar, 3);
+        g.FillPolygon(&slate, rightEar, 3);
+        GraphicsPath mask;
+        mask.AddBezier(16.f, 6.f, 3.f, 5.f, 1.f, 14.f, 3.5f, 19.f);
+        mask.AddBezier(3.5f, 19.f, 5.f, 25.f, 12.f, 26.f, 16.f, 28.f);
+        mask.AddBezier(16.f, 28.f, 22.f, 26.f, 27.f, 25.f, 28.5f, 19.f);
+        mask.AddBezier(28.5f, 19.f, 31.f, 13.f, 27.f, 5.f, 16.f, 6.f);
+        mask.CloseFigure();
+        g.FillPath(&slate, &mask);
+        GraphicsState face = g.Save();
+        g.SetClip(&mask);
+        g.FillRectangle(&porcelain, 16.f, 5.f, 15.f, 24.f);
+        g.Restore(face);
+        Pen outline(Color(255, 34, 33, 39), 1.3f);
+        g.DrawPath(&outline, &mask);
+        g.DrawLine(&outline, 16.f, 6.5f, 16.f, 26.f);
 
-    SolidBrush blue(Color(255, 94, 199, 250));
-    g.FillEllipse(&blue, 8.5f, 14.5f, 6.0f, 5.2f);
-    g.FillEllipse(&blue, 17.5f, 14.5f, 6.0f, 5.2f);
-    g.FillEllipse(&black, 10.7f, 15.2f, 1.8f, 3.8f);
-    g.FillEllipse(&black, 19.7f, 15.2f, 1.8f, 3.8f);
+        g.FillEllipse(&porcelain, 5.4f, 12.6f, 8.f, 8.5f);
+        g.FillEllipse(&ink, 9.0f, 16.f, 1.7f, 1.7f);
+        g.FillEllipse(&gold, 18.4f, 12.6f, 8.2f, 8.5f);
+        g.FillEllipse(&ink, 19.2f, 13.3f, 6.7f, 7.f);
+        g.FillEllipse(&porcelain, 22.3f, 15.1f, 1.8f, 1.8f);
+        PointF pendant[] = {{16, 24}, {17.5f, 26.5f}, {20, 27.5f}, {17.5f, 29},
+                            {16, 31}, {14.5f, 29}, {12, 27.5f}, {14.5f, 26.5f}};
+        g.FillPolygon(&gold, pendant, 8);
+    } else {
+        SolidBrush black(Color(255, 22, 22, 26));
+        PointF lEar[3] = { {4, 15}, {6, 3}, {14, 11} };
+        PointF rEar[3] = { {28, 15}, {26, 3}, {18, 11} };
+        g.FillPolygon(&black, lEar, 3);
+        g.FillPolygon(&black, rEar, 3);
+        Color furColor(255, 22, 22, 26);
+        if (coat == CatCoatTheme::Siamese) furColor = Color(255, 122, 90, 76);
+        if (coat == CatCoatTheme::Shorthair) furColor = Color(255, 167, 170, 169);
+        if (coat == CatCoatTheme::OrangeWhite) furColor = Color(255, 223, 155, 89);
+        SolidBrush fur(furColor);
+        g.FillEllipse(&fur, 4.0f, 8.0f, 24.0f, 21.0f);
+        if (coat == CatCoatTheme::OrangeWhite || coat == CatCoatTheme::Shorthair) {
+            SolidBrush milk(Color(255, 247, 243, 232));
+            g.FillEllipse(&milk, 11.f, 20.f, 10.f, 6.f);
+        }
 
-    SolidBrush red(Color(255, 225, 43, 61));
-    PointF bowLeft[] = {{8, 22}, {16, 25}, {8, 29}};
-    PointF bowRight[] = {{24, 22}, {24, 29}, {16, 25}};
-    g.FillPolygon(&red, bowLeft, 3);
-    g.FillPolygon(&red, bowRight, 3);
-    g.FillEllipse(&blue, 14.0f, 23.0f, 4.0f, 5.0f);
+        Color iris = coat == CatCoatTheme::ClassicBlack ? Color(255, 202, 221, 103)
+                   : (coat == CatCoatTheme::Shorthair || coat == CatCoatTheme::OrangeWhite)
+                        ? Color(255, 222, 179, 119) : Color(255, 94, 199, 250);
+        SolidBrush blue(iris);
+        g.FillEllipse(&blue, 8.5f, 14.5f, 6.0f, 5.2f);
+        g.FillEllipse(&blue, 17.5f, 14.5f, 6.0f, 5.2f);
+        g.FillEllipse(&black, 10.7f, 15.2f, 1.8f, 3.8f);
+        g.FillEllipse(&black, 19.7f, 15.2f, 1.8f, 3.8f);
+
+        if (coat == CatCoatTheme::SapphireTwinTail) {
+            SolidBrush red(Color(255, 225, 43, 61));
+            PointF bowLeft[] = {{8, 22}, {16, 25}, {8, 29}};
+            PointF bowRight[] = {{24, 22}, {24, 29}, {16, 25}};
+            g.FillPolygon(&red, bowLeft, 3);
+            g.FillPolygon(&red, bowRight, 3);
+            g.FillEllipse(&blue, 14.0f, 23.0f, 4.0f, 5.0f);
+        }
+    }
 
     HICON hIcon = nullptr;
     bmp.GetHICON(&hIcon);
@@ -366,8 +534,13 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING, CMD_TOGGLE_VISIBLE, app.isVisible ? L"\u9690\u85CF\u5C0F\u732B" : L"\u663E\u793A\u5C0F\u732B");
-    AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH, L"\u5B8C\u5168\u9F20\u6807\u7A7F\u900F (Ctrl+Alt+Shift+P / \u6309\u4F4FAlt\u53EF\u53F3\u952E)");
+    const wchar_t* clickLabel = app.clickHotkeyRegistered
+        ? L"完全鼠标穿透 (Ctrl+Alt+Shift+P / 按住 Alt 可右键)"
+        : L"完全鼠标穿透 (按住 Alt 可右键)";
+    AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH, clickLabel);
     AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A");
+    if (migrateLegacyAutostart(false))
+        AppendMenuW(menu, MF_STRING, CMD_MIGRATE_AUTOSTART, L"将此目录旧版的开机启动迁移到 ArkCats");
     AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
@@ -386,15 +559,15 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_STRING | (app.settings.petInteraction ? MF_CHECKED : 0), CMD_TOGGLE_PET, L"\u6478\u5934/\u6478\u80CC\u95ED\u773C\u4E92\u52A8");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-    // Cat Coat Skin submenu
     HMENU coatMenu = CreatePopupMenu();
-    std::wstring twinTailLabel = std::wstring(kPetName) + L"（双尾蓝宝石黑猫）";
-    AppendMenuW(coatMenu, MF_STRING | (app.settings.coatTheme == CatCoatTheme::SapphireTwinTail ? MF_CHECKED : 0), CMD_COAT_SAPPHIRE_TWIN_TAIL, twinTailLabel.c_str());
-    AppendMenuW(coatMenu, MF_STRING | (app.settings.coatTheme == CatCoatTheme::ClassicBlack ? MF_CHECKED : 0), CMD_COAT_BLACK, L"\u7ECF\u5178\u5C0F\u9ED1\u732B (\u539F\u7248)");
-    AppendMenuW(coatMenu, MF_STRING | (app.settings.coatTheme == CatCoatTheme::Siamese ? MF_CHECKED : 0), CMD_COAT_SIAMESE, L"\u6316\u7164\u66B9\u7F57\u732B");
-    AppendMenuW(coatMenu, MF_STRING | (app.settings.coatTheme == CatCoatTheme::Shorthair ? MF_CHECKED : 0), CMD_COAT_SHORTHAIR, L"美短（银虎斑加白）");
-    AppendMenuW(coatMenu, MF_STRING | (app.settings.coatTheme == CatCoatTheme::OrangeWhite ? MF_CHECKED : 0), CMD_COAT_ORANGE_WHITE, L"橘白猫");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)coatMenu, L"\u732B\u54AA\u76AE\u80A4");
+    int selected = 0;
+    for (int i = 0; i < static_cast<int>(std::size(skins)); ++i) {
+        const auto& skin = skins[i];
+        AppendMenuW(coatMenu, MF_STRING, skin.command, skin.label);
+        if (app.settings.coatTheme == skin.coat) selected = i;
+    }
+    CheckMenuRadioItem(coatMenu, 0, static_cast<UINT>(std::size(skins) - 1), selected, MF_BYPOSITION);
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(coatMenu), L"皮肤选择");
 
     // Keyboard Theme submenu
     HMENU kbMenu = CreatePopupMenu();
@@ -403,15 +576,16 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::RetroCream ? MF_CHECKED : 0), CMD_KB_RETRO, L"\u590D\u53E4\u5976\u6CB9\u7070");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)kbMenu, L"\u952E\u76D8\u914D\u8272");
 
-    // Eye Color submenu
-    HMENU eyeMenu = CreatePopupMenu();
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, L"\u7ECF\u5178\u8367\u5149\u9EC4\u7EFF (\u539F\u7248)");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SiameseBlue ? MF_CHECKED : 0), CMD_EYE_BLUE, L"\u66B9\u7F57\u5B9D\u77F3\u84DD");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::WarmAmber ? MF_CHECKED : 0), CMD_EYE_AMBER, L"\u7425\u73C0\u91D1\u77B3");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::IceCyan ? MF_CHECKED : 0), CMD_EYE_CYAN, L"\u51B0\u6676\u6D45\u84DD");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SoftAmber ? MF_CHECKED : 0), CMD_EYE_SOFT_AMBER, L"柔和琥珀");
-    AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, L"淡金青绿");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, L"\u77B3\u8272\u5207\u6362");
+    if (app.settings.coatTheme != CatCoatTheme::Wang) {
+        HMENU eyeMenu = CreatePopupMenu();
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, L"\u7ECF\u5178\u8367\u5149\u9EC4\u7EFF (\u539F\u7248)");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SiameseBlue ? MF_CHECKED : 0), CMD_EYE_BLUE, L"\u66B9\u7F57\u5B9D\u77F3\u84DD");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::WarmAmber ? MF_CHECKED : 0), CMD_EYE_AMBER, L"\u7425\u73C0\u91D1\u77B3");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::IceCyan ? MF_CHECKED : 0), CMD_EYE_CYAN, L"\u51B0\u6676\u6D45\u84DD");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SoftAmber ? MF_CHECKED : 0), CMD_EYE_SOFT_AMBER, L"柔和琥珀");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, L"淡金青绿");
+        AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, L"\u77B3\u8272\u5207\u6362");
+    }
 
     // Scale submenu
     HMENU scaleMenu = CreatePopupMenu();
@@ -424,16 +598,30 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)scaleMenu, L"\u5C3A\u5BF8\u5927\u5C0F");
 
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    if (app.settings.coatTheme == CatCoatTheme::Wang)
+        AppendMenuW(menu, MF_STRING, CMD_DEMO_GO_STONE, L"演示落子");
     AppendMenuW(menu, MF_STRING, CMD_DEMO_BURST, L"\u6F14\u793A\u6253\u5B57\u52A8\u753B");
     AppendMenuW(menu, MF_STRING, CMD_RESET_POS, L"\u91CD\u7F6E\u4F4D\u7F6E\u5230\u53F3\u4E0B\u89D2");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_QUIT, L"\u9000\u51FA KuroCat");
+    AppendMenuW(menu, MF_STRING, CMD_QUIT, L"\u9000\u51FA ArkCats");
 
     HWND menuOwner = app.menuOwnerHwnd ? app.menuOwnerHwnd : app.hwnd;
     SetForegroundWindow(menuOwner);
     UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPt.x, screenPt.y, 0, menuOwner, nullptr);
     PostMessageW(menuOwner, WM_NULL, 0, 0);
     DestroyMenu(menu);
+
+    for (const auto& skin : skins) {
+        if (cmd == skin.command) {
+            if (skin.coat != app.settings.coatTheme) {
+                app.settings.selectCoat(skin.coat);
+                app.physics.setCoat(app.settings.coatTheme);
+                app.settings.saveToRegistry();
+                registerTrayIcon(app, true);
+            }
+            return;
+        }
+    }
 
     switch (cmd) {
         case CMD_TOGGLE_NOTIFICATIONS:
@@ -457,17 +645,15 @@ void showContextMenu(AppState& app, POINT screenPt) {
             setPetVisible(app, !app.isVisible);
             break;
         case CMD_TOGGLE_CLICKTHROUGH:
-            app.settings.fullClickThrough = !app.settings.fullClickThrough;
-            app.settings.saveToRegistry();
-            if (app.settings.fullClickThrough) {
-                showTrayBalloon(app,
-                    L"KuroCat \u5DF2\u5F00\u542F\u5B8C\u5168\u9F20\u6807\u7A7F\u900F",
-                    L"\u53D6\u6D88\u65B9\u5F0F\uFF1A\u6309 Ctrl+Alt+Shift+P\uFF0C\u6216\u6309\u4F4F Alt \u952E\u53F3\u952E\u5C0F\u732B\uFF0C\u6216\u70B9\u53F3\u4E0B\u89D2\u6258\u76D8\u5C0F\u732B\u56FE\u6807\uFF0C\u6216\u518D\u6B21\u53CC\u51FB KuroCat.exe");
-            }
+            toggleFullClickThrough(app);
             break;
         case CMD_TOGGLE_TOPMOST:
             app.settings.alwaysOnTop = !app.settings.alwaysOnTop;
             applyWindowScaleAndPosition(app, false);
+            break;
+        case CMD_MIGRATE_AUTOSTART:
+            if (!migrateLegacyAutostart(true))
+                MessageBoxW(menuOwner, L"未能完成开机启动迁移，请重新打开菜单检查。", kAppName, MB_OK | MB_ICONINFORMATION);
             break;
         case CMD_TOGGLE_AUTOSTART:
             setAutoStartEnabled(!isAutoStartEnabled());
@@ -484,23 +670,6 @@ void showContextMenu(AppState& app, POINT screenPt) {
             app.settings.petInteraction = !app.settings.petInteraction;
             app.settings.saveToRegistry();
             break;
-        case CMD_COAT_BLACK:
-            app.settings.coatTheme = CatCoatTheme::ClassicBlack;
-            app.settings.eyeTheme = EyeColorTheme::NeonChartreuse;
-            app.settings.saveToRegistry();
-            break;
-        case CMD_COAT_SIAMESE:
-        case CMD_COAT_SAPPHIRE_TWIN_TAIL:
-            app.settings.coatTheme = cmd == CMD_COAT_SIAMESE ? CatCoatTheme::Siamese : CatCoatTheme::SapphireTwinTail;
-            app.settings.eyeTheme = EyeColorTheme::SiameseBlue;
-            app.settings.saveToRegistry();
-            break;
-        case CMD_COAT_SHORTHAIR:
-        case CMD_COAT_ORANGE_WHITE:
-            app.settings.coatTheme = cmd == CMD_COAT_SHORTHAIR ? CatCoatTheme::Shorthair : CatCoatTheme::OrangeWhite;
-            app.settings.eyeTheme = EyeColorTheme::SoftAmber;
-            app.settings.saveToRegistry();
-            break;
         case CMD_EYE_SOFT_AMBER: app.settings.eyeTheme = EyeColorTheme::SoftAmber; app.settings.saveToRegistry(); break;
         case CMD_EYE_REFERENCE_HAZEL: app.settings.eyeTheme = EyeColorTheme::ReferenceHazel; app.settings.saveToRegistry(); break;
         case CMD_KB_MILK:   app.settings.keyboardTheme = KeyboardTheme::ClassicMilk; app.settings.saveToRegistry(); break;
@@ -515,6 +684,12 @@ void showContextMenu(AppState& app, POINT screenPt) {
         case CMD_SCALE_100: app.settings.scale = 1.00f; applyWindowScaleAndPosition(app, true); break;
         case CMD_SCALE_125: app.settings.scale = 1.25f; applyWindowScaleAndPosition(app, true); break;
         case CMD_SCALE_150: app.settings.scale = 1.50f; applyWindowScaleAndPosition(app, true); break;
+        case CMD_DEMO_GO_STONE:
+            if (app.settings.coatTheme == CatCoatTheme::Wang) {
+                if (!app.isVisible) setPetVisible(app, true);
+                app.physics.placeGoStone();
+            }
+            break;
         case CMD_DEMO_BURST:
             app.demoActive = true;
             app.demoStartTime = nowSeconds();
@@ -768,24 +943,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_HOTKEY:
-            if (app && wParam == HOTKEY_CLICKTHROUGH_ID) {
-                app->settings.fullClickThrough = !app->settings.fullClickThrough;
-                app->settings.saveToRegistry();
-                if (app->settings.fullClickThrough) {
-                    showTrayBalloon(*app,
-                        L"KuroCat \u5DF2\u5F00\u542F\u5B8C\u5168\u9F20\u6807\u7A7F\u900F",
-                        L"\u518D\u6B21\u6309 Ctrl+Alt+Shift+P \u6216\u6309\u4F4F Alt \u53F3\u952E\u5C0F\u732B\u5373\u53EF\u53D6\u6D88");
-                } else {
-                    showTrayBalloon(*app,
-                        L"KuroCat \u5DF2\u53D6\u6D88\u5B8C\u5168\u9F20\u6807\u7A7F\u900F",
-                        L"\u73B0\u5728\u53EF\u4EE5\u6B63\u5E38\u62D6\u52A8\u3001\u6478\u5934\u548C\u53F3\u952E\u6253\u5F00\u83DC\u5355\u4E86");
-                }
+            if (app && app->clickHotkeyRegistered && hwnd == app->menuOwnerHwnd && wParam == HOTKEY_CLICKTHROUGH_ID) {
+                toggleFullClickThrough(*app);
             }
             return 0;
 
         case WM_WAKE_EXISTING:
             if (app) {
-                // Re-launching KuroCat.exe unlocks click-through, restores visibility & opens settings menu!
+                // Re-launching ArkCats.exe unlocks click-through, restores visibility & opens settings menu!
                 if (app->settings.fullClickThrough) {
                     app->settings.fullClickThrough = false;
                     app->settings.saveToRegistry();
@@ -829,11 +994,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
-    // Single-instance guard: re-launching KuroCat.exe wakes the existing cat,
+    SetCurrentProcessExplicitAppUserModelID(L"ArkCats.DesktopPet");
+    // Single-instance guard: re-launching ArkCats.exe wakes the existing cat,
     // cancels full click-through, and pops up the menu so users NEVER get stuck!
-    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\KuroCatDesktopPetSingleInstance");
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, L"Local\\ArkCatsDesktopPetSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        if (HWND existing = FindWindowW(L"KuroCatTrayOwnerClass", nullptr)) {
+        if (HWND existing = FindWindowW(L"ArkCatsTrayOwnerClass", nullptr)) {
             PostMessageW(existing, WM_WAKE_EXISTING, 0, 0);
         }
         if (hMutex) CloseHandle(hMutex);
@@ -849,11 +1015,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     AppState app;
     g_app = &app;
     app.settings.loadFromRegistry();
-
-    // Refresh auto-start exe path if user enabled auto-start and moved KuroCat.exe
-    if (isAutoStartEnabled()) {
-        setAutoStartEnabled(true);
-    }
+    app.physics.setCoat(app.settings.coatTheme);
 
     app.input.onKeyDown = [&](PhysicalKey k) {
         if (app.isVisible) app.physics.triggerKeyDown(k, app.settings);
@@ -866,7 +1028,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = wndProc;
     wc.hInstance = hInst;
-    wc.lpszClassName = L"KuroCatOverlayWindowClass";
+    wc.lpszClassName = L"ArkCatsOverlayWindowClass";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     RegisterClassExW(&wc);
 
@@ -875,13 +1037,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     trayWc.cbSize = sizeof(trayWc);
     trayWc.lpfnWndProc = wndProc;
     trayWc.hInstance = hInst;
-    trayWc.lpszClassName = L"KuroCatTrayOwnerClass";
+    trayWc.lpszClassName = L"ArkCatsTrayOwnerClass";
     RegisterClassExW(&trayWc);
 
     app.menuOwnerHwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW,
         trayWc.lpszClassName,
-        L"KuroCatTray",
+        L"ArkCatsTray",
         WS_POPUP,
         0, 0, 0, 0,
         nullptr, nullptr, hInst, nullptr
@@ -900,7 +1062,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     app.hwnd = CreateWindowExW(
         exStyle,
         wc.lpszClassName,
-        kPetName,
+        kAppName,
         WS_POPUP,
         initialOrigin.x, initialOrigin.y, initialSize.cx, initialSize.cy,
         nullptr, nullptr, hInst, nullptr
@@ -918,7 +1080,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
 
     // Global shortcut Ctrl+Alt+Shift+P to toggle full click-through anytime!
     if (app.menuOwnerHwnd) {
-        RegisterHotKey(app.menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'P');
+        app.clickHotkeyRegistered = RegisterHotKey(app.menuOwnerHwnd, HOTKEY_CLICKTHROUGH_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'P') != FALSE;
     }
 
     ShowWindow(app.hwnd, SW_SHOWNOACTIVATE);

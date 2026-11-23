@@ -11,6 +11,9 @@
 #include <algorithm>
 #include "CatPhysics.hpp"
 #include "../../shared/CoatPatterns.hpp"
+#include "WangBody.hpp"
+#include "WangFace.hpp"
+#include "GoStones.hpp"
 
 enum class CatHitZone {
     None,
@@ -23,18 +26,19 @@ public:
     static constexpr float RadToDeg = 57.2957795f;
 
     static CatHitZone hitTest(Pt p, const CatPhysics& simulation) {
+        bool wangCoat = simulation.coat() == CatCoatTheme::Wang;
         const CatPose& physics = simulation.displayPose();
         p.y += physics.jumpHeight;
         float cx = CatPhysics::SeatAnchor.x + physics.bodyShiftX.value;
         float breath = std::sin(physics.time * 2.1f) * 1.6f;
         Pt headCenter = { cx + physics.bodyTilt.value * 36.0f + physics.headYaw.value * 7.5f,
-                          126.0f + physics.headOffsetY.value + physics.headPitch.value * 4.8f + breath * 1.1f };
+                          (wangCoat ? 122.0f : 126.0f) + physics.headOffsetY.value + physics.headPitch.value * 4.8f + breath * 1.1f };
 
         float hdx = (p.x - headCenter.x) / 48.0f;
         float hdy = (p.y - headCenter.y) / 42.0f;
         if (hdx * hdx + hdy * hdy <= 1.0f) return CatHitZone::Head;
 
-        float bdx = (p.x - cx) / 58.0f;
+        float bdx = wangCoat ? (p.x - cx - 10.0f) / 61.0f : (p.x - cx) / 58.0f;
         float bdy = (p.y - 196.0f) / 56.0f;
         if (bdx * bdx + bdy * bdy <= 1.0f) return CatHitZone::Body;
 
@@ -44,6 +48,8 @@ public:
     static void draw(Gdiplus::Graphics& g, const CatPhysics& simulation, const CatSettings& settings) {
         using namespace Gdiplus;
         const CatPose& physics = simulation.displayPose();
+        bool wangCoat = settings.coatTheme == CatCoatTheme::Wang;
+        EyeColorTheme effectColor = wangCoat ? EyeColorTheme::WarmAmber : settings.eyeTheme;
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetPixelOffsetMode(PixelOffsetModeHighQuality);
         g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
@@ -54,14 +60,14 @@ public:
 
         Pt headCenter = {
             seatX + physics.bodyTilt.value * 36.0f + physics.headYaw.value * 7.5f,
-            126.0f + physics.headOffsetY.value + physics.headPitch.value * 4.8f + breath * 1.1f
+            (wangCoat ? 122.0f : 126.0f) + physics.headOffsetY.value + physics.headPitch.value * 4.8f + breath * 1.1f
         };
 
         // 1. Mini White Mouse (facing cat)
         drawMouse(g, simulation, settings.keyboardTheme);
 
         // 2. Mini 65% Mechanical Keyboard (facing cat) + Backlit Glow
-        drawKeyboard(g, simulation, settings.keyboardTheme, settings.eyeTheme);
+        drawKeyboard(g, simulation, settings.keyboardTheme, effectColor);
 
         GraphicsState beforeJump{};
         if (physics.jumpHeight > 0.f) {
@@ -69,6 +75,25 @@ public:
             g.TranslateTransform(0.f, -physics.jumpHeight);
         }
 
+        if (wangCoat) {
+            wang::body::tail(g, seatX, seatY, physics);
+            wang::body::torso(g, seatX, seatY, physics);
+            wang::body::paws(g, seatX, seatY, physics);
+            wang::drawHeadAndMane(g, headCenter, physics);
+            wang::body::pendant(g, headCenter, seatX, physics);
+        } else {
+            drawStandardCat(g, seatX, seatY, headCenter, breath, physics, settings);
+        }
+        if (physics.jumpHeight > 0.f) g.Restore(beforeJump);
+        if (wangCoat) wang::drawGoStones(g, simulation);
+        if (settings.showKeyBadges) drawFloatingKeycaps(g, simulation);
+        drawSparkles(g, simulation, effectColor, physics.sleepZOpacity);
+    }
+
+private:
+    static void drawStandardCat(Gdiplus::Graphics& g, float seatX, float seatY, Pt headCenter,
+                                float breath, const CatPose& physics, const CatSettings& settings) {
+        using namespace Gdiplus;
         // 3. Tail
         if (physics.tailLiftDegrees > 0.f) {
             GraphicsState beforeLift = g.Save();
@@ -100,18 +125,8 @@ public:
 
         // 8. Front Paws (Idle Sitting & Dynamic Reaching)
         drawFrontPaws(g, seatX, seatY, breath, physics, settings.coatTheme);
-        if (physics.jumpHeight > 0.f) g.Restore(beforeJump);
-
-        // 9. Floating Keycap Badges
-        if (settings.showKeyBadges) {
-            drawFloatingKeycaps(g, simulation);
-        }
-
-        // 10. Subtle Petting Sparkles & Sleep Z
-        drawSparkles(g, simulation, settings.eyeTheme, physics.sleepZOpacity);
     }
 
-private:
     static Gdiplus::Color catBlack(BYTE a = 255)      { return Gdiplus::Color(a, 22, 22, 24); }
     static Gdiplus::Color contourMint(BYTE a = 194)   { return Gdiplus::Color(a, 209, 235, 227); }
     static Gdiplus::Color whiskerWhite(BYTE a = 174)  { return Gdiplus::Color(a, 224, 230, 235); }

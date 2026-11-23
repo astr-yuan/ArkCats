@@ -16,7 +16,8 @@ enum class CatCoatTheme : int {
     Siamese = 1,
     Shorthair = 2,
     OrangeWhite = 3,
-    SapphireTwinTail = 4
+    SapphireTwinTail = 4,
+    Wang = 5
 };
 
 enum class KeyboardTheme : int {
@@ -48,37 +49,77 @@ struct CatSettings {
     int posX = -99999;
     int posY = -99999;
 
+    void selectCoat(CatCoatTheme coat) {
+        coatTheme = coat;
+        switch (coat) {
+            case CatCoatTheme::ClassicBlack: eyeTheme = EyeColorTheme::NeonChartreuse; break;
+            case CatCoatTheme::Shorthair:
+            case CatCoatTheme::OrangeWhite: eyeTheme = EyeColorTheme::SoftAmber; break;
+            case CatCoatTheme::Wang: eyeTheme = EyeColorTheme::WarmAmber; break;
+            default: eyeTheme = EyeColorTheme::SiameseBlue; break;
+        }
+    }
+
     void loadFromRegistry() {
         HKEY hKey = nullptr;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\KuroCat", 0, KEY_READ, &hKey) != ERROR_SUCCESS) return;
+        bool legacy = false;
+        LSTATUS opened = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\ArkCats", 0, KEY_READ, &hKey);
+        if (opened == ERROR_FILE_NOT_FOUND) {
+            legacy = true;
+            // The original KuroCat and the Christine edition used the same key.
+            // Only import it when it carries the edition-specific skin setting.
+            opened = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\KuroCat", 0, KEY_READ, &hKey);
+            if (opened == ERROR_SUCCESS) {
+                DWORD type = 0, size = 0;
+                if (RegQueryValueExW(hKey, L"TwinTailCoatTheme", nullptr, &type, nullptr, &size) != ERROR_SUCCESS ||
+                    type != REG_DWORD || size != sizeof(DWORD)) {
+                    RegCloseKey(hKey);
+                    hKey = nullptr;
+                    opened = ERROR_FILE_NOT_FOUND;
+                }
+            }
+            if (opened == ERROR_FILE_NOT_FOUND)
+                opened = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\WangCat", 0, KEY_READ, &hKey);
+        }
+        if (opened != ERROR_SUCCESS) return;
         auto readDword = [&](const wchar_t* name, DWORD defVal) -> DWORD {
             DWORD val = defVal, sz = sizeof(val), type = 0;
             if (RegQueryValueExW(hKey, name, nullptr, &type, (LPBYTE)&val, &sz) == ERROR_SUCCESS
                 && type == REG_DWORD && sz == sizeof(val)) return val;
             return defVal;
         };
-        showKeyBadges    = readDword(L"ShowKeyBadges", 1) != 0;
-        footEasterEgg    = readDword(L"FootEasterEgg", 1) != 0;
-        petInteraction   = readDword(L"PetInteraction", 1) != 0;
-        notificationReactions = readDword(L"NotificationReactions", 0) == 1;
-        fullClickThrough = readDword(L"FullClickThrough", 0) != 0;
-        alwaysOnTop      = readDword(L"AlwaysOnTop", 1) != 0;
-        scale            = std::clamp((float)readDword(L"ScalePct", 100) / 100.0f, 0.5f, 2.0f);
-        // The custom edition keeps its appearance independent of the upstream app.
-        coatTheme        = (CatCoatTheme)std::clamp((int)readDword(L"TwinTailCoatTheme", (DWORD)CatCoatTheme::SapphireTwinTail), 0, 4);
-        keyboardTheme    = (KeyboardTheme)std::clamp((int)readDword(L"KeyboardTheme", 0), 0, 2);
-        eyeTheme         = (EyeColorTheme)std::clamp((int)readDword(L"TwinTailEyeTheme", (DWORD)EyeColorTheme::SiameseBlue), 0, 5);
-        DWORD hasPos     = readDword(L"HasPos", 0);
-        if (hasPos) {
-            posX = (int)readDword(L"PosX", 0);
-            posY = (int)readDword(L"PosY", 0);
+        auto readFlag = [&](const wchar_t* name, bool fallback) {
+            const DWORD value = readDword(name, fallback ? 1 : 0);
+            return value <= 1 ? value == 1 : fallback;
+        };
+        showKeyBadges = readFlag(L"ShowKeyBadges", true);
+        footEasterEgg = readFlag(L"FootEasterEgg", true);
+        petInteraction = readFlag(L"PetInteraction", true);
+        notificationReactions = readFlag(L"NotificationReactions", false);
+        fullClickThrough = readFlag(L"FullClickThrough", false);
+        alwaysOnTop = readFlag(L"AlwaysOnTop", true);
+        const DWORD percent = readDword(L"ScalePct", 100);
+        scale = percent >= 50 && percent <= 200 ? (float)percent / 100.0f : 1.0f;
+        const DWORD skin = legacy ? (DWORD)CatCoatTheme::SapphireTwinTail :
+                                    readDword(L"Skin", MAXDWORD);
+        selectCoat(skin <= (DWORD)CatCoatTheme::Wang ? (CatCoatTheme)skin : CatCoatTheme::SapphireTwinTail);
+        const DWORD keyboard = readDword(L"KeyboardTheme", 0);
+        if (keyboard <= (DWORD)KeyboardTheme::RetroCream) keyboardTheme = (KeyboardTheme)keyboard;
+        if (!legacy && skin <= (DWORD)CatCoatTheme::Wang && coatTheme != CatCoatTheme::Wang) {
+            const DWORD eye = readDword(L"EyeTheme", (DWORD)eyeTheme);
+            if (eye <= (DWORD)EyeColorTheme::ReferenceHazel) eyeTheme = (EyeColorTheme)eye;
+        }
+        if (readFlag(L"HasPos", false)) {
+            const int x = (int)readDword(L"PosX", (DWORD)-99999);
+            const int y = (int)readDword(L"PosY", (DWORD)-99999);
+            if (x != -99999 && y != -99999) { posX = x; posY = y; }
         }
         RegCloseKey(hKey);
     }
 
     void saveToRegistry() const {
         HKEY hKey = nullptr;
-        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\KuroCat", 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS) return;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\ArkCats", 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) != ERROR_SUCCESS) return;
         auto writeDword = [&](const wchar_t* name, DWORD val) {
             RegSetValueExW(hKey, name, 0, REG_DWORD, (const BYTE*)&val, sizeof(val));
         };
@@ -89,14 +130,15 @@ struct CatSettings {
         writeDword(L"FullClickThrough", fullClickThrough ? 1 : 0);
         writeDword(L"AlwaysOnTop", alwaysOnTop ? 1 : 0);
         writeDword(L"ScalePct", (DWORD)(scale * 100.0f + 0.5f));
-        writeDword(L"TwinTailCoatTheme", (DWORD)coatTheme);
+        writeDword(L"Skin", (DWORD)coatTheme);
         writeDword(L"KeyboardTheme", (DWORD)keyboardTheme);
-        writeDword(L"TwinTailEyeTheme", (DWORD)eyeTheme);
-        if (posX != -99999 && posY != -99999) {
-            writeDword(L"HasPos", 1);
+        writeDword(L"EyeTheme", (DWORD)eyeTheme);
+        const bool hasPosition = posX != -99999 && posY != -99999;
+        if (hasPosition) {
             writeDword(L"PosX", (DWORD)posX);
             writeDword(L"PosY", (DWORD)posY);
         }
+        writeDword(L"HasPos", hasPosition ? 1 : 0);
         RegCloseKey(hKey);
     }
 };
@@ -175,6 +217,7 @@ struct CatPose {
     Spring1D huntIntensity{0.0f};
 
     bool leftPawOnMouse = false;
+    bool leftPawPlayingGo = false;
     bool leftPawTyping = false;
     bool rightPawTyping = false;
 
@@ -346,6 +389,51 @@ private:
 
 class CatPhysics : public CatPose {
 public:
+    // The fragment of a goban appears while a stone is in play. Completed
+    // moves stay on their intersections the next time the board appears.
+    struct GoMove {
+        static constexpr int sequenceLength = 8;
+        static constexpr float release = 0.26f, landing = 0.78f, lifetime = 3.4f;
+        int turns = 0;
+        float age = lifetime;
+        float initialOpacity = 0.f;
+        Pt launch{};
+        bool visible() const { return age < lifetime; }
+        float opacity() const {
+            return std::clamp(std::min(initialOpacity + age / 0.14f,
+                                       (lifetime - age) / 0.36f), 0.f, 1.f);
+        }
+    } go;
+
+    CatCoatTheme coat() const { return coat_; }
+
+    void setCoat(CatCoatTheme coat) {
+        if (coat == coat_) return;
+        if (go.visible() && !leftPawTyping && !leftPawOnMouse) {
+            leftPaw = Spring2D{LeftPawRest};
+        }
+        if (lookingAtGo_) {
+            headYaw = Spring1D{};
+            headPitch = Spring1D{};
+            eyeGaze = Spring2D{};
+        }
+        go = GoMove{};
+        leftPawPlayingGo = false;
+        lookingAtGo_ = false;
+        if (reaction_.mode() != StartleMode::None) reaction_ = StartleReaction{};
+        coat_ = coat;
+    }
+
+    void placeGoStone() {
+        if (coat_ != CatCoatTheme::Wang || go.age < GoMove::landing + 0.15f) return;
+        go.initialOpacity = go.opacity();
+        go.turns = go.turns % GoMove::sequenceLength + 1;
+        go.age = 0.f;
+        go.launch = displayPose().leftPaw.point();
+        earTwitch.velocity -= 2.8f;
+        sleepiness = 0.f;
+    }
+
     Spring2D mouseOffset{{0.0f, 0.0f}};
     Spring1D mousePressLeft{0.0f};
     Spring1D mousePressRight{0.0f};
@@ -361,7 +449,9 @@ public:
     const CatPose& displayPose() const { return reaction_.displayPose(*this); }
 
     void triggerKeyDown(PhysicalKey key, const CatSettings& settings) {
+        setCoat(settings.coatTheme);
         double now = nowSeconds();
+        if (key == PhysicalKey::Enter) placeGoStone();
         PhysicalKey vk = visualKeyOf(key);
         keyGlow[vk] = 1.0f;
 
@@ -434,8 +524,10 @@ public:
     }
 
     void step(float rawDt, const RECT& windowRect, InputEngine& engine, const CatSettings& settings) {
+        setCoat(settings.coatTheme);
         float dt = std::min(rawDt, 1.0f / 25.0f);
         time += dt;
+        if (go.visible()) go.age = std::min(GoMove::lifetime, go.age + dt);
         engine.pollMouse(dt);
 
         double now = nowSeconds();
@@ -465,7 +557,7 @@ public:
         // 2. Sleepy idle detection
         double lastAny = std::max(engine.lastKeyActivityTime, std::max(engine.lastMouseMoveTime, lastPetTime_));
         double idleSec = now - lastAny;
-        if (activeKeys.empty() && idleSec > 45.0) {
+        if (activeKeys.empty() && idleSec > 45.0 && !(go.visible() && go.age < 1.1f)) {
             float targetSleep = std::min(1.0f, (float)((idleSec - 45.0) / 35.0));
             sleepiness += (targetSleep - sleepiness) * dt * 1.5f;
             if (sleepiness > 0.8f) {
@@ -552,7 +644,14 @@ public:
 
         Pt liveMouse = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y };
 
-        if (leftKey != PhysicalKey::None) {
+        leftPawPlayingGo = go.age < 0.52f && leftKey == PhysicalKey::None &&
+                           !engine.leftMouseDown && !engine.rightMouseDown;
+        if (leftPawPlayingGo) {
+            float reach = std::clamp(go.age / GoMove::release, 0.f, 1.f);
+            leftPaw.setTarget({153.f - 26.f * reach, 216.f - 20.f * reach});
+            leftPawTyping = false;
+            leftPawOnMouse = false;
+        } else if (leftKey != PhysicalKey::None) {
             leftPaw.setTarget(KeyboardLayout::canvasPointForKey(leftKey));
             leftPawTyping = true;
             leftPawOnMouse = false;
@@ -583,6 +682,7 @@ public:
         }
 
         leftPaw.step(dt, 360.0f, 24.0f);
+        if (go.age <= GoMove::release) go.launch = leftPaw.point();
         rightPaw.step(dt, 360.0f, 24.0f);
         hindFoot.step(dt, 320.0f, 22.0f);
         hindFootActive.step(dt, 260.0f, 22.0f);
@@ -641,6 +741,11 @@ public:
             lookY = cursorNY * 0.72f + 0.25f;
         }
 
+        lookingAtGo_ = go.age < 0.96f && activeKeys.empty();
+        if (lookingAtGo_) {
+            lookX = -0.60f;
+            lookY = 0.36f;
+        }
         if (sleepiness > 0.45f) {
             headYaw.target = 0.0f;
             headPitch.target = 0.45f * sleepiness;
@@ -729,6 +834,8 @@ public:
 
 private:
     StartleReaction reaction_;
+    CatCoatTheme coat_ = CatCoatTheme::SapphireTwinTail;
+    bool lookingAtGo_ = false;
     float nextBlinkTime_ = 3.2f;
     bool isBlinking_ = false;
     float blinkTimer_ = 0.0f;

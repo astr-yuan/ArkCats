@@ -6,6 +6,11 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using Windows.UI.Notifications.Management;
 
+[assembly: System.Reflection.AssemblyTitle("ArkCats · Windows 通知助手")]
+[assembly: System.Reflection.AssemblyProduct("ArkCats")]
+[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+
 internal enum WatchStatus { Ready = 1, Added = 2, Denied = 3, Failed = 4, NotGranted = 5 }
 
 internal static class Program

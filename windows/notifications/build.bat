@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "TARGET=%~f1"
-if not defined TARGET set "TARGET=%~dp0..\ChristineNotifications.exe"
+if not defined TARGET set "TARGET=%~dp0..\ArkCatsNotifications.exe"
 cd /d "%~dp0" || exit /b 1
 set "NETFX=%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319"
 set "METADATA=%SystemRoot%\System32\WinMetadata"

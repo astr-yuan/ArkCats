@@ -28,7 +28,7 @@ public:
             case State::Ready:         return L"已就绪，等待新通知";
             case State::Denied:        return L"通知权限已拒绝或撤销，请在 Windows 设置中允许通知访问";
             case State::NeedsAccess:   return L"尚未获得通知访问权限";
-            case State::MissingHelper: return L"找不到 ChristineNotifications.exe，请完整解压发布包";
+            case State::MissingHelper: return L"找不到 ArkCatsNotifications.exe，请完整解压发布包";
             case State::Failed:        return L"通知监听已停止，可重试连接";
         }
         return L"";
@@ -43,7 +43,7 @@ public:
         path.resize(len);
         auto slash = path.find_last_of(L"\\/");
         if (slash == std::wstring::npos) return;
-        path.replace(slash + 1, std::wstring::npos, L"ChristineNotifications.exe");
+        path.replace(slash + 1, std::wstring::npos, L"ArkCatsNotifications.exe");
         std::wstring command = L"\"" + path + L"\" --watch " + std::to_wstring(GetCurrentProcessId()) +
             L" " + std::to_wstring(reinterpret_cast<std::uintptr_t>(owner)) +
             (requestPermission ? L" 1" : L" 0");
