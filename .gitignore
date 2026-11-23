@@ -1,0 +1,8 @@
+/windows/build/
+/build/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+/.vs/
