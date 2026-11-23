@@ -73,7 +73,9 @@ enum MenuCmd : UINT {
     CMD_RESET_POS,
     CMD_QUIT,
     CMD_TOGGLE_NOTIFICATIONS,
-    CMD_RETRY_NOTIFICATIONS
+    CMD_RETRY_NOTIFICATIONS,
+    CMD_COAT_RED_FOX,
+    CMD_COAT_ARCTIC_FOX
 };
 
 struct AppState {
@@ -159,7 +161,9 @@ constexpr SkinMenuEntry skins[] = {
     {CMD_COAT_BLACK, CatCoatTheme::ClassicBlack, L"经典小黑猫（KuroCat）"},
     {CMD_COAT_SIAMESE, CatCoatTheme::Siamese, L"挖煤暹罗猫（KuroCat）"},
     {CMD_COAT_SHORTHAIR, CatCoatTheme::Shorthair, L"美短（银虎斑加白）（KuroCat）"},
-    {CMD_COAT_ORANGE_WHITE, CatCoatTheme::OrangeWhite, L"橘白猫（KuroCat）"}
+    {CMD_COAT_ORANGE_WHITE, CatCoatTheme::OrangeWhite, L"橘白猫（KuroCat）"},
+    {CMD_COAT_RED_FOX, CatCoatTheme::RedFox, L"赤狐"},
+    {CMD_COAT_ARCTIC_FOX, CatCoatTheme::ArcticFox, L"北极狐"}
 };
 
 HICON createCatTrayIcon(CatCoatTheme coat);
@@ -332,7 +336,9 @@ HICON createCatTrayIcon(CatCoatTheme coat) {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.Clear(Color(0, 0, 0, 0));
 
-    if (coat == CatCoatTheme::Wang) {
+    if (isFoxCoat(coat)) {
+        if (!arkfox::drawPortrait(g, coat, RectF(1.f, 1.f, sz - 2.f, sz - 2.f))) return nullptr;
+    } else if (coat == CatCoatTheme::Wang) {
         SolidBrush ink(Color(255, 38, 37, 44));
         SolidBrush slate(Color(255, 69, 69, 79));
         SolidBrush porcelain(Color(255, 248, 246, 237));
@@ -576,7 +582,7 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::RetroCream ? MF_CHECKED : 0), CMD_KB_RETRO, L"\u590D\u53E4\u5976\u6CB9\u7070");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)kbMenu, L"\u952E\u76D8\u914D\u8272");
 
-    if (app.settings.coatTheme != CatCoatTheme::Wang) {
+    if (hasSelectableEyes(app.settings.coatTheme)) {
         HMENU eyeMenu = CreatePopupMenu();
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, L"\u7ECF\u5178\u8367\u5149\u9EC4\u7EFF (\u539F\u7248)");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SiameseBlue ? MF_CHECKED : 0), CMD_EYE_BLUE, L"\u66B9\u7F57\u5B9D\u77F3\u84DD");

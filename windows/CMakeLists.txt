@@ -9,10 +9,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(ArkCats WIN32 src/main.cpp)
 target_compile_definitions(ArkCats PRIVATE WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+set(fox_resources
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/FoxResourceIds.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/red.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/arctic.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/red-lids.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/arctic-lids.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/red-paw-backs.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/art/foxes/arctic-paw-backs.png")
+target_include_directories(ArkCats PRIVATE "$<$<COMPILE_LANGUAGE:RC>:${CMAKE_CURRENT_SOURCE_DIR}>")
 
 if(MSVC)
     enable_language(RC)
-    target_sources(ArkCats PRIVATE app.manifest version.rc)
+    target_sources(ArkCats PRIVATE app.manifest version.rc foxes.rc)
+    set_property(SOURCE foxes.rc APPEND PROPERTY OBJECT_DEPENDS "${fox_resources}")
     set_property(TARGET ArkCats PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(ArkCats PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/EHsc;/W3>")
 else()
@@ -29,16 +39,18 @@ else()
             COMMAND "${CMAKE_COMMAND}" -E env "PATH=${toolchain_dir};$ENV{PATH}" "${CMAKE_RC_COMPILER}"
                 "--preprocessor=${preprocessor}" --preprocessor-arg=-E --preprocessor-arg=-xc
                 --preprocessor-arg=-DRC_INVOKED -i app.rc -O coff -o "${resource_object}"
-            DEPENDS app.rc app.manifest version.rc WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" VERBATIM)
+            DEPENDS app.rc app.manifest version.rc foxes.rc ${fox_resources}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" VERBATIM)
         target_sources(ArkCats PRIVATE "${resource_object}")
     else()
         target_sources(ArkCats PRIVATE app.rc)
-        set_property(SOURCE app.rc APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.manifest" "${CMAKE_CURRENT_SOURCE_DIR}/version.rc")
+        set_property(SOURCE app.rc APPEND PROPERTY OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app.manifest"
+            "${CMAKE_CURRENT_SOURCE_DIR}/version.rc" "${CMAKE_CURRENT_SOURCE_DIR}/foxes.rc" "${fox_resources}")
     endif()
     target_link_options(ArkCats PRIVATE -municode -static)
 endif()
 
-target_link_libraries(ArkCats PRIVATE user32 gdi32 gdiplus shell32 advapi32 wtsapi32)
+target_link_libraries(ArkCats PRIVATE user32 gdi32 gdiplus shell32 advapi32 wtsapi32 ole32)
 
 set(helper_dir "${CMAKE_CURRENT_BINARY_DIR}/notifications/$<CONFIG>")
 set(helper_output "${helper_dir}/ArkCatsNotifications.exe")

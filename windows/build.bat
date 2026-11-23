@@ -13,20 +13,23 @@ exit /b 1
 if not exist build\msvc\ mkdir build\msvc
 rc /nologo /fobuild\msvc\version.res version.rc
 if errorlevel 1 exit /b %errorlevel%
+rc /nologo /fobuild\msvc\foxes.res foxes.rc
+if errorlevel 1 exit /b %errorlevel%
 cl /nologo /std:c++17 /O2 /MT /EHsc /utf-8 /W3 /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 ^
-    src\main.cpp build\msvc\version.res /Fobuild\msvc\main.obj /FeArkCats.exe ^
+    src\main.cpp build\msvc\version.res build\msvc\foxes.res /Fobuild\msvc\main.obj /FeArkCats.exe ^
     /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:app.manifest ^
-    user32.lib gdi32.lib gdiplus.lib shell32.lib advapi32.lib wtsapi32.lib
+    user32.lib gdi32.lib gdiplus.lib shell32.lib advapi32.lib wtsapi32.lib ole32.lib
 if errorlevel 1 exit /b %errorlevel%
 goto helper
 
 :mingw
 if not exist build\mingw\ mkdir build\mingw
-windres -i app.rc -O coff -o build\mingw\app.res.o
+windres --preprocessor=g++ --preprocessor-arg=-E --preprocessor-arg=-xc --preprocessor-arg=-DRC_INVOKED ^
+    -i app.rc -O coff -o build\mingw\app.res.o
 if errorlevel 1 exit /b %errorlevel%
 g++ -std=c++17 -O2 -mwindows -municode -static -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 ^
     src\main.cpp build\mingw\app.res.o -o ArkCats.exe ^
-    -luser32 -lgdi32 -lgdiplus -lshell32 -ladvapi32 -lwtsapi32
+    -luser32 -lgdi32 -lgdiplus -lshell32 -ladvapi32 -lwtsapi32 -lole32
 if errorlevel 1 exit /b %errorlevel%
 :helper
 call notifications\build.bat "%~dp0ArkCatsNotifications.exe"

@@ -17,8 +17,18 @@ enum class CatCoatTheme : int {
     Shorthair = 2,
     OrangeWhite = 3,
     SapphireTwinTail = 4,
-    Wang = 5
+    Wang = 5,
+    RedFox = 6,
+    ArcticFox = 7
 };
+
+inline constexpr bool isFoxCoat(CatCoatTheme coat) {
+    return coat == CatCoatTheme::RedFox || coat == CatCoatTheme::ArcticFox;
+}
+
+inline constexpr bool hasSelectableEyes(CatCoatTheme coat) {
+    return coat != CatCoatTheme::Wang && !isFoxCoat(coat);
+}
 
 enum class KeyboardTheme : int {
     ClassicMilk = 0,
@@ -54,7 +64,9 @@ struct CatSettings {
         switch (coat) {
             case CatCoatTheme::ClassicBlack: eyeTheme = EyeColorTheme::NeonChartreuse; break;
             case CatCoatTheme::Shorthair:
+            case CatCoatTheme::RedFox:
             case CatCoatTheme::OrangeWhite: eyeTheme = EyeColorTheme::SoftAmber; break;
+            case CatCoatTheme::ArcticFox: eyeTheme = EyeColorTheme::IceCyan; break;
             case CatCoatTheme::Wang: eyeTheme = EyeColorTheme::WarmAmber; break;
             default: eyeTheme = EyeColorTheme::SiameseBlue; break;
         }
@@ -102,10 +114,11 @@ struct CatSettings {
         scale = percent >= 50 && percent <= 200 ? (float)percent / 100.0f : 1.0f;
         const DWORD skin = legacy ? (DWORD)CatCoatTheme::SapphireTwinTail :
                                     readDword(L"Skin", MAXDWORD);
-        selectCoat(skin <= (DWORD)CatCoatTheme::Wang ? (CatCoatTheme)skin : CatCoatTheme::SapphireTwinTail);
+        const bool knownSkin = skin <= (DWORD)CatCoatTheme::ArcticFox;
+        selectCoat(knownSkin ? (CatCoatTheme)skin : CatCoatTheme::SapphireTwinTail);
         const DWORD keyboard = readDword(L"KeyboardTheme", 0);
         if (keyboard <= (DWORD)KeyboardTheme::RetroCream) keyboardTheme = (KeyboardTheme)keyboard;
-        if (!legacy && skin <= (DWORD)CatCoatTheme::Wang && coatTheme != CatCoatTheme::Wang) {
+        if (!legacy && knownSkin && hasSelectableEyes(coatTheme)) {
             const DWORD eye = readDword(L"EyeTheme", (DWORD)eyeTheme);
             if (eye <= (DWORD)EyeColorTheme::ReferenceHazel) eyeTheme = (EyeColorTheme)eye;
         }
@@ -258,12 +271,12 @@ public:
 
     StartleMode begin(const CatPose& live, const InputEngine& input, double now) {
         if (mode_ != StartleMode::None) return StartleMode::None;
-        double lastMouse = std::max(input.lastMouseMoveTime, input.lastMouseClickTime);
+        double lastMouse = input.lastMouseActivity();
         auto recent = [now](double stamp, double window) {
             return stamp > 0.0 && now - stamp < window;
         };
         bool key = !input.activeKeys.empty() || recent(input.lastKeyActivityTime, 0.65);
-        bool mouse = buttonHeld(input) || recent(lastMouse, 0.75);
+        bool mouse = input.anyMouseButtonDown() || recent(lastMouse, 0.75);
         if (key && (!mouse || input.lastKeyActivityTime >= lastMouse)) mode_ = StartleMode::Typing;
         else if (mouse) mode_ = StartleMode::Mouse;
         else if (live.sleepiness > 0.45f) mode_ = StartleMode::Sleep;
@@ -317,7 +330,7 @@ public:
             float pause = pulse(0.f,.14f,.74f,1.01f);
             float lift = pulse(.025f,.24f,.64f,1.05f);
             look(lift,.28f,-.52f,.025f,-4.f);
-            if (!(live.leftPawOnMouse && buttonHeld(input))) {
+            if (!(live.leftPawOnMouse && input.anyMouseButtonDown())) {
                 toward(pose_.leftPaw, leftHover_, pause);
             }
             toward(pose_.rightPaw,rightHover_,pause);
@@ -355,9 +368,6 @@ private:
     float elapsed_ = 0.f;
     float glanceSide_ = 1.f;
 
-    static bool buttonHeld(const InputEngine& input) {
-        return input.leftMouseDown || input.rightMouseDown || input.otherMouseDown;
-    }
     static Pt hoverTarget(const Spring2D& paw, bool typing, PhysicalKey fallback, float dx, float lift) {
         Pt key = typing ? Pt{paw.x.target,paw.y.target} : KeyboardLayout::canvasPointForKey(fallback);
         return {key.x+dx, key.y-lift};
@@ -555,9 +565,9 @@ public:
         }
 
         // 2. Sleepy idle detection
-        double lastAny = std::max(engine.lastKeyActivityTime, std::max(engine.lastMouseMoveTime, lastPetTime_));
+        double lastAny = std::max({engine.lastKeyActivityTime, engine.lastMouseActivity(), lastPetTime_});
         double idleSec = now - lastAny;
-        if (activeKeys.empty() && idleSec > 45.0 && !(go.visible() && go.age < 1.1f)) {
+        if (activeKeys.empty() && !engine.anyMouseButtonDown() && idleSec > 45.0 && !(go.visible() && go.age < 1.1f)) {
             float targetSleep = std::min(1.0f, (float)((idleSec - 45.0) / 35.0));
             sleepiness += (targetSleep - sleepiness) * dt * 1.5f;
             if (sleepiness > 0.8f) {

@@ -44,6 +44,9 @@ public:
     std::function<void(PhysicalKey)> onKeyUp;
     std::function<void(int, bool)> onMouseClick;
 
+    bool anyMouseButtonDown() const { return leftMouseDown || rightMouseDown || otherMouseDown; }
+    double lastMouseActivity() const { return std::max(lastMouseMoveTime, lastMouseClickTime); }
+
     bool registerRawInput(HWND hwnd) {
         RAWINPUTDEVICE rid[2] = {};
         // Keyboard (Generic Desktop 0x01, Usage 0x06)

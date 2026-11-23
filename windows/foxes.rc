@@ -1,0 +1,8 @@
+#include "src/FoxResourceIds.h"
+
+IDR_FOX_RED_OPEN        RCDATA "art/foxes/red.png"
+IDR_FOX_ARCTIC_OPEN     RCDATA "art/foxes/arctic.png"
+IDR_FOX_RED_LIDS        RCDATA "art/foxes/red-lids.png"
+IDR_FOX_ARCTIC_LIDS     RCDATA "art/foxes/arctic-lids.png"
+IDR_FOX_RED_PAW_BACKS   RCDATA "art/foxes/red-paw-backs.png"
+IDR_FOX_ARCTIC_PAW_BACKS RCDATA "art/foxes/arctic-paw-backs.png"
