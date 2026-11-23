@@ -609,7 +609,7 @@ public:
         const bool mouseHeld = fox ? engine.anyMouseButtonDown() : (engine.leftMouseDown || engine.rightMouseDown);
         const bool keyboardIsLatest = fox && hasLastTypedPoint_ && lastTypedTime_ > engine.lastMouseActivity();
         const bool allowMousePaw = !keyboardIsLatest || mouseHeld;
-        bool mouseRecent = (mouseAge < 2.2 || mouseHeld) && allowMousePaw;
+        const bool mouseRecent = (mouseAge < 2.2 || mouseHeld) && allowMousePaw;
         const bool mouseActivelyUsed = (mouseAge < .75 || mouseHeld) && allowMousePaw;
 
         std::vector<PhysicalKey> leftCands, rightCands;
@@ -679,17 +679,6 @@ public:
         mousePressRight.step(dt, 400.0f, 24.0f);
 
         Pt liveMouse = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y };
-
-        if (fox && mouseRecent && leftKey == PhysicalKey::None && rightKey != PhysicalKey::None) {
-            Pt cap = KeyboardLayout::canvasPointForKey(rightKey);
-            // With both arms fully extended, the opposite keyboard edge and mouse are too far apart.
-            // Let the most recent physical action land. Both actual devices retain their own feedback.
-            float span = std::hypot(cap.x - (liveMouse.x + 2.f), cap.y - (liveMouse.y - 3.f));
-            if (span > (coat_ == CatCoatTheme::RedFox ? 155.f : 165.f)) {
-                if (keyboardIsLatest) mouseRecent = false;
-                else rightKey = PhysicalKey::None;
-            }
-        }
 
         leftPawPlayingGo = go.age < 0.52f && leftKey == PhysicalKey::None &&
                            !engine.leftMouseDown && !engine.rightMouseDown;
@@ -891,22 +880,30 @@ private:
 
     void updateFoxBalance(float dt) {
         const bool useLeft = leftPawOnMouse || leftPawTyping;
-        const float count = float(int(useLeft) + int(rightPawTyping));
         foxLeftContact.target = useLeft ? 1.f : 0.f;
         foxRightContact.target = rightPawTyping ? 1.f : 0.f;
         foxLeftContact.step(dt, 360.f, 33.f);
         foxRightContact.step(dt, 360.f, 33.f);
 
-        Pt shift{};
-        if (count > 0.f) {
-            // Both target contacts share the chest. A resting paw remains available for support.
-            const Pt l = useLeft ? Pt{leftPaw.x.target - LeftPawRest.x, leftPaw.y.target - LeftPawRest.y} : Pt{};
-            const Pt r = rightPawTyping ? Pt{rightPaw.x.target - RightPawRest.x, rightPaw.y.target - RightPawRest.y} : Pt{};
-            shift.x = std::clamp(.58f * (l.x + r.x) / count, -50.f, 48.f);
-            shift.y = std::clamp(.46f * (l.y + r.y) / count + .09f * std::max(std::fabs(l.x), std::fabs(r.x)), 0.f, 28.f);
-        }
-        foxWeightShift.setTarget(shift);
-        foxWeightShift.step(dt, 360.f, 33.f);
+        const bool red = coat_ == CatCoatTheme::RedFox;
+        const float easyReach = red ? 76.f : 82.f;
+        auto reach = [easyReach](const Spring2D& paw, Pt shoulder) -> Pt {
+            const float dx = paw.x.target - shoulder.x, dy = paw.y.target - shoulder.y;
+            // Center keys are within the foreleg's comfortable reach at rest.
+            // Only the outer keys and mouse gradually recruit the body.
+            float t = std::clamp((std::hypot(dx, dy) - easyReach) / 34.f, 0.f, 1.f);
+            t = t * t * (3.f - 2.f * t);
+            return {10.f * t * std::clamp(dx / 55.f, -1.f, 1.f),
+                    4.5f * t * std::clamp(dy / 60.f, 0.f, 1.f)};
+        };
+        // Resting upper-arm attachments in the 360 x 320 canvas for each registered drawing.
+        const Pt left = useLeft ? reach(leftPaw, red ? Pt{165.f,194.5f} : Pt{163.3f,186.6f}) : Pt{};
+        const Pt right = rightPawTyping ? reach(rightPaw, red ? Pt{203.4f,194.5f} : Pt{205.1f,186.6f}) : Pt{};
+        // Opposing reaches counterbalance. On the same side the farther paw sets the shift.
+        const float leftward = std::min({0.f, left.x, right.x});
+        const float rightward = std::max({0.f, left.x, right.x});
+        foxWeightShift.setTarget({leftward + rightward, std::max(left.y, right.y)});
+        foxWeightShift.step(dt, 100.f, 20.f);
     }
 
     Pt catLookTarget(const RECT& windowRect, const InputEngine& engine, double now) const {

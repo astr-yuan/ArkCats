@@ -36,16 +36,14 @@ inline Pt sub(Pt a,Pt b) { return {a.x-b.x,a.y-b.y}; }
 inline Pt mul(Pt a,float s) { return {a.x*s,a.y*s}; }
 inline float length(Pt a) { return std::hypot(a.x,a.y); }
 inline Pt shoulderSocket(bool red,int side) {
-    return red ? Pt{side ? 328.f:233.f,384.f} : Pt{side ? 333.f:223.f,369.f};
+    return red ? Pt{side ? 337.f:224.f,392.f} : Pt{side ? 337.f:224.f,381.f};
 }
 inline Pt restingPad(bool red,int side) {
     return red ? Pt{side ? 309.f:260.f,503.f} : Pt{side ? 309.f:245.f,423.f};
 }
-inline float upperLength(bool red) { return red?26.f:28.f; }
-inline float lowerLength(bool red) { return red?32.f:34.f; }
 struct Motion {
     float breath{},sleep{},close{},earL{},earR{},tail{},yaw{},pitch{},nod{},tilt{},squash{},tuck{};
-    Pt weight{},origin{},scapula[2]{};
+    Pt weight{},origin{};
     float contact[2]{};
 };
 
@@ -79,12 +77,6 @@ inline Motion motion(const CatPose& p,bool red) {
         float engagement=i?p.foxRightContact.value:p.foxLeftContact.value;
         // Notification hover and retraction are still driven by the displayed joints.
         m.contact[i]=std::clamp(std::max(engagement,smooth(1.2f,18.f,length(sub(target,rest)))),0.f,1.f);
-        Pt shoulder=add(world(shoulderSocket(red,i),red),m.weight);
-        Pt delta=sub(target,shoulder);
-        float span=std::max(1.f,length(delta));
-        float ergonomic=upperLength(red)+lowerLength(red)-6.f;
-        float slide=std::clamp(span-ergonomic,0.f,red?20.f:23.f)*m.contact[i];
-        m.scapula[i]=mul(delta,slide/span);
     }
     return m;
 }
@@ -92,7 +84,7 @@ inline Motion motion(const CatPose& p,bool red) {
 // Source-space displacement on a 16-pixel lattice keeps connected joints and
 // chest continuous. Open-eye frames sample the untouched master face.
 struct Node {
-    float head,chest,leftPaw,rightPaw,tail,breathing,front,load,shoulder[2];
+    float head,chest,leftPaw,rightPaw,tail,breathing,front,load;
     Pt earL,earR,tailBend;
 };
 constexpr int Cells=35, Nodes=Cells+1;
@@ -108,13 +100,6 @@ inline Rig makeRig(bool red) {
         n.front=ellipse(x,y,280,232,145,94);
         float hips=smooth(380,488,y);
         n.load=.90f+.10f*smooth(286,352,y)-.31f*hips;
-        for(int s=0;s<2;++s) {
-            Pt joint=shoulderSocket(red,s);
-            // The scapula glides beneath the coat. The centerline of the bib
-            // stays on the rib cage when the two shoulders move apart.
-            float side=s ? smooth(284,322,x) : 1-smooth(238,276,x);
-            n.shoulder[s]=.26f*side*ellipse(x,y,joint.x,joint.y,98,102)*(1-n.head);
-        }
         if (red) {
             n.chest=ellipse(x,y,279,341,125,132)*(1-smooth(365,395,y))*(1-n.head);
             n.earL=bend(x,y,{210,153},{178,35},64);
@@ -149,8 +134,8 @@ inline Mesh deform(bool red,const Motion& f) {
         // form. Only the snout/eye plane moves a little farther toward a gaze.
         float dx=n.head*((cs-1)*x-sn*y+8.f*f.yaw)+n.front*6.3f*f.yaw;
         float dy=n.head*(sn*x+(cs-1)*y+f.nod-57.f*f.squash)+n.front*1.4f*f.pitch;
-        dx+=((n.load-.70f)*f.weight.x+n.shoulder[0]*f.scapula[0].x+n.shoulder[1]*f.scapula[1].x)/s;
-        dy+=((n.load-.70f)*f.weight.y+n.shoulder[0]*f.scapula[0].y+n.shoulder[1]*f.scapula[1].y)/s;
+        dx+=(n.load-.70f)*f.weight.x/s;
+        dy+=(n.load-.70f)*f.weight.y/s;
         dx-=x*f.squash*.16f*n.chest;
         dy+=(y-235.f)*f.squash*.42f*n.chest;
         if (red) {
@@ -177,7 +162,7 @@ inline Pt displacement(const Mesh& mesh,float x,float y) {
 }
 
 // Canvas-to-source sampling needs the inverse warp; looking up a forward
-// vector at the destination shortens a large shoulder reach and detaches the arm.
+// vector at the destination would offset the eyes and sockets during a lean.
 inline Mesh invert(const Mesh& forward) {
     Mesh back{};
     for(int j=0;j<Nodes;++j) for(int i=0;i<Nodes;++i) {
@@ -262,112 +247,139 @@ inline void paintSprite(Gdiplus::Graphics& g,Artwork& art,const Pixels& pose,con
 }
 
 struct Limb {
-    Pt shoulder, elbow, wrist, paw;
-    float width, tip, weight;
+    Pt shoulder,control,paw;
+    float rootRadius,pawRadius,weight;
+    bool left;
 };
 
-inline Limb solveLimb(Pt shoulder,Pt goal,bool red,bool left,float mix,float upper,float lower) {
-    Pt delta=sub(goal,shoulder);
-    float d=std::max(.001f,length(delta));
-    // The paw can fold toward the chest, but neither forearm can lengthen.
-    Pt direction=mul(delta,1/d);
-    d=std::min(d,upper+lower-1.3f);
-    Pt paw=add(shoulder,mul(direction,d));
-    float a=std::min(upper,.60f*d+3.5f),b=std::min(lower,.64f*d+4.5f);
-    float elbowAlong=std::clamp((d*d+a*a-b*b)/(2*d),0.f,d);
-    float outward=std::sqrt(std::max(0.f,a*a-elbowAlong*elbowAlong));
-    Pt normal=left ? Pt{-direction.y,direction.x} : Pt{direction.y,-direction.x};
-    Pt elbow=add(add(shoulder,mul(direction,elbowAlong)),mul(normal,outward));
-    Pt hand=sub(paw,elbow); float lengthToPad=std::max(.001f,length(hand));
-    Pt wrist=sub(paw,mul(hand,std::min(red?7.f:8.f,lengthToPad*.45f)/lengthToPad));
-    return {shoulder,elbow,wrist,paw,red?7.0f:8.0f,red?5.5f:6.4f,mix};
+inline Pt curvePoint(const Limb& arm,float t) {
+    return interpolate(interpolate(arm.shoulder,arm.control,t),interpolate(arm.control,arm.paw,t),t);
+}
+
+inline float radiusAt(const Limb& arm,float t,float span) {
+    // A slow taper along the whole foreleg widens a little into the soft pad.
+    float shaft=arm.rootRadius+(arm.pawRadius-arm.rootRadius)*t;
+    float pad=1.f-smooth(0.f,arm.pawRadius*1.25f,(1.f-t)*span);
+    return shaft+arm.pawRadius*.105f*pad;
+}
+
+inline float exposedPaw(float contact) {
+    // Exchange the tucked and reaching artwork while their pads still coincide.
+    // The physical spring continues the motion after the short visual handoff.
+    return smooth(0.f,.32f,contact);
 }
 
 inline Limb foreleg(bool red,int side,const CatPose& p,const Motion& m,const Mesh& forward) {
     Pt shoulder=anchored(shoulderSocket(red,side),red,m.origin,forward);
-    shoulder=add(shoulder,mul(m.scapula[side],.75f));
     Pt tucked=anchored(restingPad(red,side),red,m.origin,forward);
-    Pt target=side ? p.rightPaw.point() : p.leftPaw.point();
+    Pt target=side?p.rightPaw.point():p.leftPaw.point();
     float grip=m.contact[side];
-    return solveLimb(shoulder,interpolate(tucked,target,grip),red,!side,grip,upperLength(red),lowerLength(red));
+    Pt paw=interpolate(tucked,target,grip);
+    // The original cat follows the spring with one quadratic curve, with only
+    // a few pixels of outward bow even when extending to the opposite row.
+    float bow=grip*smooth(0.f,38.f,length(sub(paw,shoulder)));
+    Pt control=interpolate(shoulder,paw,.5f);
+    control.x+=(side ? 4.f : (p.leftPawOnMouse ? -8.f : -4.f))*bow;
+    control.y-=6.f*bow;
+    return {shoulder,control,paw,red?9.1f:9.5f,red?6.55f:6.85f,exposedPaw(grip),side==0};
 }
 
 inline Limb hindLeg(const CatPose& p,bool red,const Motion& m,const Mesh& forward) {
     Pt hip=anchored(red?Pt{356,437}:Pt{384,423},red,m.origin,forward);
-    float weight=std::clamp(p.hindFootActive.value,0.f,1.f);
-    return solveLimb(hip,p.hindFoot.point(),red,false,weight,29.f,33.f);
+    Pt pad=p.hindFoot.point(),control=interpolate(hip,pad,.5f);
+    control.x+=10.f;control.y-=8.f;
+    return {hip,control,pad,7.7f,6.f,std::clamp(p.hindFootActive.value,0.f,1.f),false};
 }
-inline Pt around(Pt center,Pt normal,float radius) {
-    return {center.x+normal.x*radius,center.y+normal.y*radius};
-}
-inline Pt unitNormal(Pt from,Pt to) {
-    float dx=to.x-from.x,dy=to.y-from.y,len=std::max(.01f,std::hypot(dx,dy));
-    return {-dy/len,dx/len};
-}
+
 inline Gdiplus::PointF point(Pt p) { return {p.x,p.y}; }
 
-inline void paintLimb(Gdiplus::Graphics& g,const Limb& limb,bool red) {
+inline void paintLimb(Gdiplus::Graphics& g,const Limb& arm,bool red) {
     using namespace Gdiplus;
-    if(limb.weight<=.006f) return;
-    Pt a=limb.shoulder,e=limb.elbow,w=limb.wrist,c=limb.paw;
-    Pt n0=unitNormal(a,e),n1=unitNormal(e,w),n2=unitNormal(w,c);
-    Pt midNormal=add(n0,n1);midNormal=mul(midNormal,1.f/std::max(.01f,length(midNormal)));
-    Pt t0{n0.y,-n0.x},t2{n2.y,-n2.x};
-    float rootWidth=limb.width,elbowWidth=.84f*rootWidth,wristWidth=.69f*limb.tip,r=limb.tip;
-    struct SidePoints { Pt root,elbow,wrist,paw; };
-    auto side=[&](float sign) -> SidePoints {
-        return {around(a,n0,sign*rootWidth),around(e,midNormal,sign*elbowWidth),
-                around(w,n1,sign*wristWidth),around(c,n2,sign*r)};
-    };
-    SidePoints l=side(1),h=side(-1);
-    // Round the elbow, taper at the wrist and widen around the pad. Draw both
-    // flanks from these joints so the outline also follows a bent forearm.
-    Pt le0=interpolate(l.root,l.elbow,.81f),le1=interpolate(l.elbow,l.wrist,.24f);
-    Pt he0=interpolate(h.root,h.elbow,.81f),he1=interpolate(h.elbow,h.wrist,.24f);
-    auto lower=[&](GraphicsPath& path) {
-        path.AddBezier(point(le1),point(interpolate(le1,l.wrist,.50f)),point(l.wrist),point(l.wrist));
-        path.AddBezier(point(l.wrist),point(around(l.wrist,t2,2.4f)),point(around(l.paw,t2,-2.8f)),point(l.paw));
-        path.AddBezier(point(l.paw),point(around(l.paw,t2,1.28f*r)),point(around(h.paw,t2,1.28f*r)),point(h.paw));
+    float span=length(sub(arm.paw,arm.shoulder));
+    if(arm.weight<=.006f || span<.001f) return;
+    constexpr int count=14;
+    std::array<PointF,count+1> outer{},inner{};
+    Pt tangent0{},tangent1{};
+    for(int i=0;i<=count;++i) {
+        float t=float(i)/count;
+        Pt center=curvePoint(arm,t);
+        Pt tangent=interpolate(sub(arm.control,arm.shoulder),sub(arm.paw,arm.control),t);
+        tangent=mul(tangent,1.f/std::max(.001f,length(tangent)));
+        Pt norm{-tangent.y,tangent.x};
+        float width=radiusAt(arm,t,span)*(arm.left?1.f:-1.f);
+        outer[i]=point(add(center,mul(norm,width)));
+        inner[i]=point(sub(center,mul(norm,width)));
+        if(i==0) tangent0=tangent;
+        if(i==count) tangent1=tangent;
+    }
+    float capRadius=radiusAt(arm,1.f,span);
+    Pt cap=mul(tangent1,capRadius*1.18f),root=mul(tangent0,-arm.rootRadius*.92f);
+    auto offset=[](PointF p,Pt delta)->PointF { return {p.X+delta.x,p.Y+delta.y}; };
+    auto addToe=[&](GraphicsPath& path) {
+        path.AddBezier(outer.back(),offset(outer.back(),cap),offset(inner.back(),cap),inner.back());
     };
     GraphicsPath path;
-    path.AddLine(point(l.root),point(le0));
-    path.AddBezier(point(le0),point(l.elbow),point(l.elbow),point(le1));
-    lower(path);
-    path.AddBezier(point(h.paw),point(around(h.paw,t2,-2.8f)),point(around(h.wrist,t2,2.4f)),point(h.wrist));
-    path.AddLine(point(h.wrist),point(he1));
-    path.AddBezier(point(he1),point(h.elbow),point(h.elbow),point(he0));
-    path.AddLine(point(he0),point(h.root));
-    path.AddBezier(point(h.root),point(around(h.root,t0,-.82f*rootWidth)),
-                   point(around(l.root,t0,-.82f*rootWidth)),point(l.root));
+    path.AddLines(outer.data(),count+1);
+    addToe(path);
+    for(int i=count;i>0;--i) path.AddLine(inner[i],inner[i-1]);
+    path.AddBezier(inner.front(),offset(inner.front(),root),offset(outer.front(),root),outer.front());
     path.CloseFigure();
-    BYTE alpha=BYTE(255*limb.weight+.5f);
-    Color colors[] = {red?Color(alpha,225,112,51):Color(alpha,248,239,231),
-                      red?Color(alpha,226,111,49):Color(alpha,247,238,229),
-                      red?Color(alpha,77,47,36):Color(alpha,244,234,223),
-                      red?Color(alpha,70,43,33):Color(alpha,238,225,213)};
-    REAL positions[]={0.f,.34f,.365f,1.f};
-    // Extend past both round caps, so GDI+ never restarts the gradient at a toe.
-    LinearGradientBrush brush(point(around(a,t0,-2.f*rootWidth)),point(around(c,t2,2.5f*r)),colors[0],colors[3]);
-    brush.SetInterpolationColors(colors,positions,4);
+
+    // Sampled at the sockets and pads of the registered forepaws. Fading the
+    // root into the torso avoids a hard painted cap as a paw leaves its seat.
+    const BYTE a=BYTE(255.f*arm.weight+.5f);
+    Pt axis=mul(sub(arm.paw,arm.shoulder),1.f/span);
+    float pad=arm.rootRadius+4.f,total=span+2.f*pad;
+    auto stop=[&](float t) { return (pad+span*t)/total; };
+    float sock=.17f+.295f*smooth(42.f,103.f,span);
+    REAL positions[]={0.f,stop(0.f),stop(.07f),stop(sock*.66f),stop(sock+.07f),stop(sock+.19f),stop(.94f),1.f};
+    Color colors[]={
+        red?Color(0,229,117,55):Color(0,249,241,234),
+        red?Color(BYTE(.12f*a),229,117,55):Color(BYTE(.12f*a),249,241,234),
+        red?Color(a,229,117,55):Color(a,249,241,234),
+        red?Color(a,223,110,51):Color(a,249,240,233),
+        red?Color(a,125,71,44):Color(a,248,238,230),
+        red?Color(a,81,49,37):Color(a,246,236,228),
+        red?Color(a,77,47,36):Color(a,244,234,225),
+        red?Color(a,77,47,36):Color(a,244,234,225)
+    };
+    LinearGradientBrush brush(point(sub(arm.shoulder,mul(axis,pad))),point(add(arm.paw,mul(axis,pad))),
+                              colors[0],colors[7]);
+    brush.SetWrapMode(WrapModeTileFlipXY);
+    brush.SetInterpolationColors(colors,positions,8);
     g.FillPath(&brush,&path);
     if(!red) {
-        // The snow fox carries the same very fine cool edge on an exposed paw.
-        Pen outline(Color(BYTE(alpha*.74f),117,125,139),.74f);
-        GraphicsPath exposed; lower(exposed);g.DrawPath(&outline,&exposed);
+        // The outer rim leaves the shoulder free of seams. Use the same edge
+        // and cap as the fill to keep the fine cool line attached to the pad.
+        LinearGradientBrush edgeInk(point(sub(arm.shoulder,mul(axis,pad))),point(add(arm.paw,mul(axis,pad))),
+                                    Color(0,117,125,139),Color(BYTE(a*.76f),117,125,139));
+        REAL rimStops[]={0.f,stop(.19f),stop(.58f),1.f};
+        Color rimColors[]={Color(0,117,125,139),Color(0,117,125,139),Color(BYTE(a*.76f),117,125,139),
+                           Color(BYTE(a*.76f),117,125,139)};
+        edgeInk.SetInterpolationColors(rimColors,rimStops,4);
+        Pen rim(&edgeInk,.74f);
+        rim.SetStartCap(LineCapRound);rim.SetEndCap(LineCapRound);rim.SetLineJoin(LineJoinRound);
+        GraphicsPath edge;
+        edge.AddLines(outer.data(),count+1);
+        addToe(edge);
+        g.DrawPath(&rim,&edge);
     }
 }
 
-inline bool onLimb(Pt q,const Limb& limb) {
-    if(limb.weight<.3f) return false;
-    const Pt joints[]={limb.shoulder,limb.elbow,limb.wrist,limb.paw};
-    for(int i=0;i<3;++i) {
-        Pt line=sub(joints[i+1],joints[i]),v=sub(q,joints[i]);
-        float t=std::clamp((v.x*line.x+v.y*line.y)/std::max(.001f,line.x*line.x+line.y*line.y),0.f,1.f);
-        if(length(sub(v,mul(line,t)))<(i==0?limb.width:limb.tip)) return true;
+inline bool onLimb(Pt q,const Limb& arm) {
+    if(arm.weight<.3f) return false;
+    float span=length(sub(arm.paw,arm.shoulder));
+    Pt previous=arm.shoulder;
+    constexpr int steps=10;
+    for(int i=1;i<=steps;++i) {
+        Pt current=curvePoint(arm,float(i)/steps),segment=sub(current,previous),v=sub(q,previous);
+        float t=std::clamp((v.x*segment.x+v.y*segment.y)/
+                           std::max(.001f,segment.x*segment.x+segment.y*segment.y),0.f,1.f);
+        if(length(sub(v,mul(segment,t)))<=radiusAt(arm,(i-1+t)/steps,span)) return true;
+        previous=current;
     }
     return false;
 }
-
 } // namespace detail
 
 inline void draw(Gdiplus::Graphics& g,const CatPhysics& simulation,CatCoatTheme coat) {
@@ -405,7 +417,7 @@ inline int hitTest(Pt canvas,const CatPhysics& simulation) {
         if(u>=PawX && u<PawX+PawW && v>=PawY && v<PawY+PawH) {
             int k=(int(v)-PawY)*PawW+int(u)-PawX;
             int side=art.pawSide[k];
-            if(side) alpha+=(art.pawBacks[(side-1)*PawW*PawH+k].a-alpha)*m.contact[side-1];
+            if(side) alpha+=(art.pawBacks[(side-1)*PawW*PawH+k].a-alpha)*exposedPaw(m.contact[side-1]);
         }
         if (alpha>36) return v<304.f ? 1 : 2;
     }
