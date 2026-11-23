@@ -79,6 +79,7 @@ inline int distance(Pixel a, Pixel b) {
 
 struct Artwork {
     Pixels open, lids, pawBacks, pose, rendered;
+    Pixels eyeLayer;
     std::vector<BYTE> pawSide;
     // Four-tap filtering is only useful near a contour or a colour boundary.
     // Include every eye and paw variant, so their moving edges stay smooth.
@@ -101,7 +102,7 @@ struct Artwork {
 
     bool load(bool red) {
         if (!loadPng(red ? IDR_FOX_RED_OPEN : IDR_FOX_ARCTIC_OPEN, Side, Side, open) ||
-            !loadPng(red ? IDR_FOX_RED_LIDS : IDR_FOX_ARCTIC_LIDS, EyeW, EyeH*9, lids) ||
+            !loadPng(red ? IDR_FOX_RED_LIDS : IDR_FOX_ARCTIC_LIDS, EyeW, EyeH*10, lids) ||
             !loadPng(red ? IDR_FOX_RED_PAW_BACKS : IDR_FOX_ARCTIC_PAW_BACKS, PawW, PawH*2, pawBacks)) {
             open.clear();
             return false;
@@ -117,27 +118,64 @@ struct Artwork {
             pawSide[i] = l==0 && r==0 ? 0 : l>=r ? 1 : 2;
         }
         pose = open;
+        eyeLayer.resize(EyeW*EyeH);
         markEdges(open.data(),Side,Side,0,0);
-        for(int i=0;i<9;++i) markEdges(lids.data()+i*EyeW*EyeH,EyeW,EyeH,EyeX,EyeY);
+        // The catchlight and ink move together through this range. Use the
+        // silhouette filter there even when it lies beyond the original eye.
+        for(int j=(EyeY-16)/Tile;j<=(EyeY+EyeH+12)/Tile;++j)
+            for(int i=(EyeX-14)/Tile;i<=(EyeX+EyeW+14)/Tile;++i)
+                edges[j*Tiles+i]=1;
         for(int i=0;i<2;++i) markEdges(pawBacks.data()+i*PawW*PawH,PawW,PawH,PawX,PawY);
         return true;
     }
 
-    const Pixels& update(float closure, float left, float right) {
-        if (closure<=0 && left<=0 && right<=0) return open;
+    void paintEyes(float closure, float gazeX, float gazeY) {
+        // In a full blink the eyelids stay anchored to the resting face.
+        float visible=1.f-std::clamp(closure,0.f,1.f);
+        float follow=visible*(2.f-visible);
+        float dx=std::clamp(gazeX,-1.f,1.f)*14.5f*follow;
+        float dy=std::clamp(gazeY,-1.f,1.f)*(gazeY<0 ? 17.f : 13.f)*follow;
+        constexpr int padX=16,padY=18;
+        for(int y=EyeY-padY;y<EyeY+EyeH+padY;++y) {
+            const Pixel* neutral=open.data()+y*Side+EyeX-padX;
+            std::copy_n(neutral,EyeW+padX*2,pose.data()+y*Side+EyeX-padX);
+        }
+        if (closure<=0 && std::abs(dx)<.001f && std::abs(dy)<.001f) return;
         float frame = std::clamp(closure,0.f,1.f)*8.f;
         int lo = int(frame), hi = std::min(lo+1,8);
         unsigned fraction = unsigned((frame-lo)*256);
-        for (int y=0; y<EyeH; ++y) {
-            auto* dest = pose.data()+(y+EyeY)*Side+EyeX;
-            if (closure<=0) {
-                std::copy_n(open.data()+(y+EyeY)*Side+EyeX,EyeW,dest);
-                continue;
-            }
-            const Pixel* a=lids.data()+(lo*EyeH+y)*EyeW;
-            const Pixel* b=lids.data()+(hi*EyeH+y)*EyeW;
-            for (int x=0; x<EyeW; ++x) dest[x]=blend(a[x],b[x],fraction);
+        const Pixel* a=lids.data()+lo*EyeW*EyeH;
+        const Pixel* b=lids.data()+hi*EyeW*EyeH;
+        const Pixel* ink=a;
+        if(fraction>0) {
+            for(int i=0;i<EyeW*EyeH;++i) eyeLayer[i]=blend(a[i],b[i],fraction);
+            ink=eyeLayer.data();
         }
+        // The last tile contains the original coat with just the irises
+        // removed. It keeps the nose and the red fox's cheek boundary fixed.
+        const Pixel* face=lids.data()+9*EyeW*EyeH;
+        for(int y=0;y<EyeH;++y)
+            std::copy_n(face+y*EyeW,EyeW,pose.data()+(EyeY+y)*Side+EyeX);
+        int x0=int(std::floor(dx)), y0=int(std::floor(dy));
+        unsigned fx=unsigned((dx-x0)*256), fy=unsigned((dy-y0)*256);
+        for(int y=1;y<EyeH;++y) {
+            Pixel* dst=pose.data()+(EyeY+y+y0)*Side+EyeX+x0;
+            const Pixel* row=ink+y*EyeW;
+            for(int x=1;x<EyeW;++x) {
+                const Pixel* p=row+x;
+                if(!(p[0].a|p[-1].a|p[-EyeW].a|p[-EyeW-1].a)) continue;
+                Pixel fg=blend(blend(p[0],p[-1],fx),blend(p[-EyeW],p[-EyeW-1],fx),fy);
+                Pixel bg=dst[x];
+                unsigned remain=255-fg.a;
+                dst[x]={BYTE(fg.b+(bg.b*remain+127)/255),BYTE(fg.g+(bg.g*remain+127)/255),
+                        BYTE(fg.r+(bg.r*remain+127)/255),BYTE(fg.a+(bg.a*remain+127)/255)};
+            }
+        }
+    }
+
+    const Pixels& update(float closure, float left, float right,float gazeX=0,float gazeY=0) {
+        if (closure<=0 && left<=0 && right<=0 && gazeX==0 && gazeY==0) return open;
+        paintEyes(closure,gazeX,gazeY);
         const unsigned strength[] = {0, unsigned(left*256), unsigned(right*256)};
         for (int y=0; y<PawH; ++y) for (int x=0; x<PawW; ++x) {
             int i=y*PawW+x, dest=(y+PawY)*Side+PawX+x;

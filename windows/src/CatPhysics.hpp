@@ -216,6 +216,9 @@ struct CatPose {
     Spring1D hindFootActive{0.0f};
 
     Spring1D bodyShiftX{0.0f};
+    // Shoulder-girdle travel in logical canvas pixels, and paw contact for the fox rig.
+    Spring2D foxWeightShift{};
+    Spring1D foxLeftContact{}, foxRightContact{};
     Spring1D bodyTilt{0.0f};
     Spring1D bodySquash{1.0f};
     Spring1D headTilt{0.0f};
@@ -431,6 +434,8 @@ public:
         leftPawPlayingGo = false;
         lookingAtGo_ = false;
         if (reaction_.mode() != StartleMode::None) reaction_ = StartleReaction{};
+        foxWeightShift = Spring2D{};
+        foxLeftContact = foxRightContact = Spring1D{};
         coat_ = coat;
     }
 
@@ -468,8 +473,10 @@ public:
         Pt pt = KeyboardLayout::canvasPointForKey(vk);
         hasLastTypedPoint_ = true;
         lastTypedPoint_ = pt;
+        lastTypedTime_ = now;
 
-        if (prefersViewerLeftPaw(key)) {
+        const bool left = prefersLeft(key);
+        if (left) {
             recentLeftKey_ = vk;
             recentLeftTime_ = now;
             leftPaw.y.velocity -= 180.0f;
@@ -480,8 +487,8 @@ public:
         }
 
         bodySquash.velocity -= 1.3f;
-        earTwitch.velocity += (prefersViewerLeftPaw(key) ? -3.8f : 3.8f);
-        headTilt.velocity += (prefersViewerLeftPaw(key) ? -1.4f : 1.4f);
+        earTwitch.velocity += (left ? -3.8f : 3.8f);
+        headTilt.velocity += (left ? -1.4f : 1.4f);
         pupilScale.target = 1.16f;
         sleepiness = 0.0f;
 
@@ -595,12 +602,19 @@ public:
 
         // 3. Limb assignment (Left Paw, Right Paw, 3-Key Hind Foot!)
         constexpr double tapHoldWindow = 0.14;
-        bool mouseRecent = (now - engine.lastMouseMoveTime < 2.2) || engine.leftMouseDown || engine.rightMouseDown;
-        bool mouseActivelyUsed = (now - engine.lastMouseMoveTime < 0.75) || engine.leftMouseDown || engine.rightMouseDown;
+        const bool fox = isFoxCoat(coat_);
+        const bool draggingMouse = fox && engine.anyMouseButtonDown();
+        const double mouseAge = fox && engine.lastMouseActivity() <= 0.0 ? 1e6 :
+            now - (fox ? engine.lastMouseActivity() : engine.lastMouseMoveTime);
+        const bool mouseHeld = fox ? engine.anyMouseButtonDown() : (engine.leftMouseDown || engine.rightMouseDown);
+        const bool keyboardIsLatest = fox && hasLastTypedPoint_ && lastTypedTime_ > engine.lastMouseActivity();
+        const bool allowMousePaw = !keyboardIsLatest || mouseHeld;
+        bool mouseRecent = (mouseAge < 2.2 || mouseHeld) && allowMousePaw;
+        const bool mouseActivelyUsed = (mouseAge < .75 || mouseHeld) && allowMousePaw;
 
         std::vector<PhysicalKey> leftCands, rightCands;
         for (PhysicalKey k : orderedKeys) {
-            if (prefersViewerLeftPaw(k)) leftCands.push_back(k);
+            if (prefersLeft(k)) leftCands.push_back(k);
             else rightCands.push_back(k);
         }
 
@@ -643,6 +657,18 @@ public:
             rightKey = recentRightKey_;
         }
 
+        if (fox && leftKey == rightKey && leftKey != PhysicalKey::None) {
+            if (prefersLeft(leftKey)) rightKey = PhysicalKey::None;
+            else leftKey = PhysicalKey::None;
+        }
+        if (draggingMouse) {
+            // Keep contact with a held button. The other paw plays the newest key.
+            if (!orderedKeys.empty()) rightKey = orderedKeys.back();
+            else if (leftKey != PhysicalKey::None && recentLeftTime_ >= recentRightTime_) rightKey = leftKey;
+            leftKey = PhysicalKey::None;
+            if (footKey == rightKey) footKey = PhysicalKey::None;
+        }
+
         // Subtle mini-mouse movement
         mouseOffset.setTarget({
             std::clamp(engine.mouseVelocity.x * 0.0045f, -5.5f, 5.5f),
@@ -653,6 +679,17 @@ public:
         mousePressRight.step(dt, 400.0f, 24.0f);
 
         Pt liveMouse = { MouseBaseCenter.x + mouseOffset.point().x, MouseBaseCenter.y + mouseOffset.point().y };
+
+        if (fox && mouseRecent && leftKey == PhysicalKey::None && rightKey != PhysicalKey::None) {
+            Pt cap = KeyboardLayout::canvasPointForKey(rightKey);
+            // With both arms fully extended, the opposite keyboard edge and mouse are too far apart.
+            // Let the most recent physical action land. Both actual devices retain their own feedback.
+            float span = std::hypot(cap.x - (liveMouse.x + 2.f), cap.y - (liveMouse.y - 3.f));
+            if (span > (coat_ == CatCoatTheme::RedFox ? 155.f : 165.f)) {
+                if (keyboardIsLatest) mouseRecent = false;
+                else rightKey = PhysicalKey::None;
+            }
+        }
 
         leftPawPlayingGo = go.age < 0.52f && leftKey == PhysicalKey::None &&
                            !engine.leftMouseDown && !engine.rightMouseDown;
@@ -710,10 +747,12 @@ public:
             targetShiftX = (avgX - 184.0f) * 0.14f;
             targetBodyTilt = (avgX - 184.0f) * 0.0011f;
         }
-        bodyShiftX.target = std::clamp(targetShiftX, -16.0f, 16.0f);
+        if (fox) updateFoxBalance(dt);
+        bodyShiftX.target = fox ? 0.f : std::clamp(targetShiftX, -16.0f, 16.0f);
         bodyTilt.target = std::clamp(targetBodyTilt, -0.12f, 0.12f);
         bodySquash.target = 1.0f - hunt * 0.11f;
         headOffsetY.target = (leftPawTyping || rightPawTyping) ? 3.5f : (sleepiness * 5.0f + hunt * 10.5f);
+        if (fox) headOffsetY.target = sleepiness * 5.f + hunt * 1.5f;
         earFold.target = std::max(petHeadIntensity * 0.7f, petBodyIntensity * 0.45f) + sleepiness * 0.25f - hunt * 0.18f;
         earTwitch.target = 0.0f;
 
@@ -725,31 +764,8 @@ public:
         earTwitch.step(dt, 320.0f, 16.0f);
 
         // 5. 2.5D Head Turning (Yaw + Pitch) & Eye Tracking (Windows screen Y is top-down!)
-        bool typingRecently = !activeKeys.empty() || (now - engine.lastKeyActivityTime < 0.65);
-        bool mouseMovedRecently = (now - engine.lastMouseMoveTime < 1.2);
-        Pt eyeOrigin = { SeatAnchor.x + bodyShiftX.value, 124.0f + headOffsetY.value };
-
-        float winW = std::max(1.0f, (float)(windowRect.right - windowRect.left));
-        float winScale = std::max(0.2f, winW / CanvasWidth);
-        float headScreenX = (float)windowRect.left + eyeOrigin.x * winScale;
-        float headScreenY = (float)windowRect.top  + eyeOrigin.y * winScale;
-
-        float curDx = ((float)engine.lastCursorPos.x - headScreenX) / 290.0f;
-        float curDy = ((float)engine.lastCursorPos.y - headScreenY) / 260.0f;
-        float curMag = std::hypot(curDx, curDy);
-        float clampedCur = std::min(1.0f, curMag);
-        float cursorNX = curMag > 0.001f ? (curDx / curMag) * clampedCur : 0.0f;
-        float cursorNY = curMag > 0.001f ? (curDy / curMag) * clampedCur : 0.0f;
-
-        float lookX = cursorNX, lookY = cursorNY;
-        if (typingRecently && !mouseMovedRecently && hasLastTypedPoint_) {
-            lookX = std::clamp((lastTypedPoint_.x - eyeOrigin.x) / 95.0f, -0.85f, 0.85f);
-            lookY = std::clamp((lastTypedPoint_.y - eyeOrigin.y) / 125.0f, -0.3f, 0.92f);
-        } else if (typingRecently && mouseMovedRecently && hasLastTypedPoint_) {
-            float kdx = std::clamp((lastTypedPoint_.x - eyeOrigin.x) / 95.0f, -0.85f, 0.85f);
-            lookX = cursorNX * 0.72f + kdx * 0.28f;
-            lookY = cursorNY * 0.72f + 0.25f;
-        }
+        Pt gaze = fox ? foxLookTarget(windowRect, engine, now) : catLookTarget(windowRect, engine, now);
+        float lookX = gaze.x, lookY = gaze.y;
 
         lookingAtGo_ = go.age < 0.96f && activeKeys.empty();
         if (lookingAtGo_) {
@@ -862,9 +878,73 @@ private:
     double recentRightTime_ = 0.0;
     bool hasLastTypedPoint_ = false;
     Pt lastTypedPoint_ = { 184.0f, 260.0f };
+    double lastTypedTime_ = -1.0;
 
     int badgeCascade_ = 0;
     double lastBadgeTime_ = 0.0;
+
+    bool prefersLeft(PhysicalKey key) const {
+        if (!isFoxCoat(coat_)) return prefersViewerLeftPaw(key);
+        // The desktop keyboard faces the pet. Use the displayed key instead of the scan-code side.
+        return KeyboardLayout::canvasPointForKey(key).x <= (LeftPawRest.x + RightPawRest.x) * .5f;
+    }
+
+    void updateFoxBalance(float dt) {
+        const bool useLeft = leftPawOnMouse || leftPawTyping;
+        const float count = float(int(useLeft) + int(rightPawTyping));
+        foxLeftContact.target = useLeft ? 1.f : 0.f;
+        foxRightContact.target = rightPawTyping ? 1.f : 0.f;
+        foxLeftContact.step(dt, 360.f, 33.f);
+        foxRightContact.step(dt, 360.f, 33.f);
+
+        Pt shift{};
+        if (count > 0.f) {
+            // Both target contacts share the chest. A resting paw remains available for support.
+            const Pt l = useLeft ? Pt{leftPaw.x.target - LeftPawRest.x, leftPaw.y.target - LeftPawRest.y} : Pt{};
+            const Pt r = rightPawTyping ? Pt{rightPaw.x.target - RightPawRest.x, rightPaw.y.target - RightPawRest.y} : Pt{};
+            shift.x = std::clamp(.58f * (l.x + r.x) / count, -50.f, 48.f);
+            shift.y = std::clamp(.46f * (l.y + r.y) / count + .09f * std::max(std::fabs(l.x), std::fabs(r.x)), 0.f, 28.f);
+        }
+        foxWeightShift.setTarget(shift);
+        foxWeightShift.step(dt, 360.f, 33.f);
+    }
+
+    Pt catLookTarget(const RECT& windowRect, const InputEngine& engine, double now) const {
+        const bool typingRecently = !engine.activeKeys.empty() || now - engine.lastKeyActivityTime < .65;
+        const bool mouseMovedRecently = now - engine.lastMouseMoveTime < 1.2;
+        Pt eyeOrigin{SeatAnchor.x + bodyShiftX.value, 124.f + headOffsetY.value};
+        const float scale = std::max(.2f, std::max(1.f, float(windowRect.right - windowRect.left)) / CanvasWidth);
+        const float dx = (float(engine.lastCursorPos.x) - (float(windowRect.left) + eyeOrigin.x * scale)) / 290.f;
+        const float dy = (float(engine.lastCursorPos.y) - (float(windowRect.top) + eyeOrigin.y * scale)) / 260.f;
+        const float mag = std::hypot(dx, dy), clipped = std::min(1.f, mag);
+        Pt gaze{mag > .001f ? (dx / mag) * clipped : 0.f, mag > .001f ? (dy / mag) * clipped : 0.f};
+        if (typingRecently && hasLastTypedPoint_) {
+            const float keyX = std::clamp((lastTypedPoint_.x - eyeOrigin.x) / 95.f, -.85f, .85f);
+            if (mouseMovedRecently) return {gaze.x * .72f + keyX * .28f, gaze.y * .72f + .25f};
+            return {keyX, std::clamp((lastTypedPoint_.y - eyeOrigin.y) / 125.f, -.3f, .92f)};
+        }
+        return gaze;
+    }
+
+    Pt foxLookTarget(const RECT& rect, const InputEngine& input, double now) const {
+        const float scaleX = std::max(1.f, float(rect.right - rect.left)) / CanvasWidth;
+        const float scaleY = std::max(1.f, float(rect.bottom - rect.top)) / CanvasHeight;
+        Pt target{float(input.lastCursorPos.x - rect.left) / scaleX,
+                  float(input.lastCursorPos.y - rect.top) / scaleY};
+        // Holding the mouse keeps the real pointer in focus. Otherwise the latest input wins.
+        if (!input.anyMouseButtonDown() && hasLastTypedPoint_ && lastTypedTime_ > input.lastMouseActivity() &&
+            (!input.pressedOrder.empty() || now - lastTypedTime_ < .65)) {
+            target = input.pressedOrder.empty() ? lastTypedPoint_ : KeyboardLayout::canvasPointForKey(input.pressedOrder.back());
+        }
+        // Both source images have their eye midpoint at (280,216), relative to the tail base (280,520).
+        const float artScale = coat_ == CatCoatTheme::RedFox ? .34f : .37f;
+        const Pt eyes{SeatAnchor.x + .9f * foxWeightShift.x.value,
+                      238.f - 304.f * artScale + .9f * foxWeightShift.y.value + artScale * headOffsetY.value};
+        const float dx = (target.x - eyes.x) / 60.f;
+        const float dy = (target.y - eyes.y) / 48.f;
+        const float length = std::sqrt(1.f + dx*dx + dy*dy);
+        return {dx / length, dy / length};
+    }
 
     static float randRange(float a, float b) {
         static thread_local std::mt19937 rng{ std::random_device{}() };
