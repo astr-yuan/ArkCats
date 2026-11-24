@@ -15,8 +15,10 @@ rc /nologo /fobuild\msvc\version.res version.rc
 if errorlevel 1 exit /b %errorlevel%
 rc /nologo /fobuild\msvc\foxes.res foxes.rc
 if errorlevel 1 exit /b %errorlevel%
+rc /nologo /fobuild\msvc\luo.res luo.rc
+if errorlevel 1 exit /b %errorlevel%
 cl /nologo /std:c++17 /O2 /MT /EHsc /utf-8 /W3 /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 ^
-    src\main.cpp build\msvc\version.res build\msvc\foxes.res /Fobuild\msvc\main.obj /FeArkCats.exe ^
+    src\main.cpp build\msvc\version.res build\msvc\foxes.res build\msvc\luo.res /Fobuild\msvc\main.obj /FeArkCats.exe ^
     /link /SUBSYSTEM:WINDOWS /MANIFEST:EMBED /MANIFESTINPUT:app.manifest ^
     user32.lib gdi32.lib gdiplus.lib shell32.lib advapi32.lib wtsapi32.lib ole32.lib
 if errorlevel 1 exit /b %errorlevel%

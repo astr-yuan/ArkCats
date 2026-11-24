@@ -75,7 +75,8 @@ enum MenuCmd : UINT {
     CMD_TOGGLE_NOTIFICATIONS,
     CMD_RETRY_NOTIFICATIONS,
     CMD_COAT_RED_FOX,
-    CMD_COAT_ARCTIC_FOX
+    CMD_COAT_ARCTIC_FOX,
+    CMD_COAT_LUO_XIAOHEI
 };
 
 struct AppState {
@@ -158,6 +159,7 @@ struct SkinMenuEntry {
 constexpr SkinMenuEntry skins[] = {
     {CMD_COAT_SAPPHIRE_TWIN_TAIL, CatCoatTheme::SapphireTwinTail, L"Miss. Christine"},
     {CMD_COAT_WANG, CatCoatTheme::Wang, L"望的丑猫"},
+    {CMD_COAT_LUO_XIAOHEI, CatCoatTheme::LuoXiaohei, L"罗小黑"},
     {CMD_COAT_BLACK, CatCoatTheme::ClassicBlack, L"经典小黑猫（KuroCat）"},
     {CMD_COAT_SIAMESE, CatCoatTheme::Siamese, L"挖煤暹罗猫（KuroCat）"},
     {CMD_COAT_SHORTHAIR, CatCoatTheme::Shorthair, L"美短（银虎斑加白）（KuroCat）"},
@@ -338,6 +340,8 @@ HICON createCatTrayIcon(CatCoatTheme coat) {
 
     if (isFoxCoat(coat)) {
         if (!arkfox::drawPortrait(g, coat, RectF(1.f, 1.f, sz - 2.f, sz - 2.f))) return nullptr;
+    } else if (coat == CatCoatTheme::LuoXiaohei) {
+        if (!arkluo::drawPortrait(g, RectF(1.f, 1.f, sz - 2.f, sz - 2.f))) return nullptr;
     } else if (coat == CatCoatTheme::Wang) {
         SolidBrush ink(Color(255, 38, 37, 44));
         SolidBrush slate(Color(255, 69, 69, 79));
@@ -529,40 +533,40 @@ void showContextMenu(AppState& app, POINT screenPt) {
 
     // Status & live stats header
     std::wstring statusStr = app.input.isRawInputRegistered
-        ? L"\u25CF \u786C\u4EF6\u7EA7\u5168\u72B6\u6001\u76D1\u542C\u4E2D (Raw Input \u6E38\u620F/\u6253\u5B57)"
-        : L"\u26A0 Raw Input \u672A\u542F\u52A8";
+        ? L"正在监听键鼠输入"
+        : L"键鼠监听未启动";
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, statusStr.c_str());
 
-    std::wstring stats = L"本次运行击键 " + std::to_wstring(app.input.sessionKeystrokes)
-        + L"  \u00B7  KPM " + std::to_wstring(app.input.currentKPM())
-        + L"  \u00B7  \u6478\u732B " + std::to_wstring(app.physics.totalPetSessions) + L" \u6B21";
+    std::wstring stats = L"本次击键 " + std::to_wstring(app.input.sessionKeystrokes)
+        + L"  ·  " + std::to_wstring(app.input.currentKPM())
+        + L" 键/分  ·  抚摸 " + std::to_wstring(app.physics.totalPetSessions) + L" 次";
     AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, stats.c_str());
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(menu, MF_STRING, CMD_TOGGLE_VISIBLE, app.isVisible ? L"\u9690\u85CF\u5C0F\u732B" : L"\u663E\u793A\u5C0F\u732B");
+    AppendMenuW(menu, MF_STRING, CMD_TOGGLE_VISIBLE, app.isVisible ? L"隐藏桌宠" : L"显示桌宠");
     const wchar_t* clickLabel = app.clickHotkeyRegistered
-        ? L"完全鼠标穿透 (Ctrl+Alt+Shift+P / 按住 Alt 可右键)"
-        : L"完全鼠标穿透 (按住 Alt 可右键)";
+        ? L"鼠标穿透（Ctrl+Alt+Shift+P 切换，Alt+右键菜单）"
+        : L"鼠标穿透（Alt+右键菜单）";
     AppendMenuW(menu, MF_STRING | (app.settings.fullClickThrough ? MF_CHECKED : 0), CMD_TOGGLE_CLICKTHROUGH, clickLabel);
-    AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, L"\u7A97\u53E3\u7F6E\u9876\u663E\u793A");
+    AppendMenuW(menu, MF_STRING | (app.settings.alwaysOnTop ? MF_CHECKED : 0), CMD_TOGGLE_TOPMOST, L"窗口置顶");
     if (migrateLegacyAutostart(false))
-        AppendMenuW(menu, MF_STRING, CMD_MIGRATE_AUTOSTART, L"将此目录旧版的开机启动迁移到 ArkCats");
-    AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
+        AppendMenuW(menu, MF_STRING, CMD_MIGRATE_AUTOSTART, L"迁移本目录旧版开机启动项");
+    AppendMenuW(menu, MF_STRING | (isAutoStartEnabled() ? MF_CHECKED : 0), CMD_TOGGLE_AUTOSTART, L"开机启动");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     AppendMenuW(menu, MF_STRING | (app.settings.notificationReactions ? MF_CHECKED : 0),
-                CMD_TOGGLE_NOTIFICATIONS, L"收到 Windows 通知时做出反应");
+                CMD_TOGGLE_NOTIFICATIONS, L"响应 Windows 通知");
     if (app.settings.notificationReactions) {
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, app.notifications.statusText());
         if (app.notifications.canRetry()) {
-            AppendMenuW(menu, MF_STRING, CMD_RETRY_NOTIFICATIONS, L"重新连接并检查通知权限");
+            AppendMenuW(menu, MF_STRING, CMD_RETRY_NOTIFICATIONS, L"重试通知连接");
         }
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(menu, MF_STRING | (app.settings.showKeyBadges ? MF_CHECKED : 0), CMD_TOGGLE_BADGES, L"\u663E\u793A\u6309\u952E\u6C14\u6CE1 ([S] [W] [\u21E7])");
-    AppendMenuW(menu, MF_STRING | (app.settings.footEasterEgg ? MF_CHECKED : 0), CMD_TOGGLE_FOOT, L"3\u952E\u540C\u65F6\u6309\u300C\u7528\u811A\u6309\u300D\u5F69\u86CB");
-    AppendMenuW(menu, MF_STRING | (app.settings.petInteraction ? MF_CHECKED : 0), CMD_TOGGLE_PET, L"\u6478\u5934/\u6478\u80CC\u95ED\u773C\u4E92\u52A8");
+    AppendMenuW(menu, MF_STRING | (app.settings.showKeyBadges ? MF_CHECKED : 0), CMD_TOGGLE_BADGES, L"显示按键气泡");
+    AppendMenuW(menu, MF_STRING | (app.settings.footEasterEgg ? MF_CHECKED : 0), CMD_TOGGLE_FOOT, L"三键同按时用后爪");
+    AppendMenuW(menu, MF_STRING | (app.settings.petInteraction ? MF_CHECKED : 0), CMD_TOGGLE_PET, L"摸头或摸背互动");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     HMENU coatMenu = CreatePopupMenu();
@@ -577,20 +581,20 @@ void showContextMenu(AppState& app, POINT screenPt) {
 
     // Keyboard Theme submenu
     HMENU kbMenu = CreatePopupMenu();
-    AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::ClassicMilk ? MF_CHECKED : 0), CMD_KB_MILK, L"\u7ECF\u5178\u5976\u767D\u6696\u9EC4 (\u539F\u7248)");
+    AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::ClassicMilk ? MF_CHECKED : 0), CMD_KB_MILK, L"经典奶白暖黄");
     AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::MidnightHacker ? MF_CHECKED : 0), CMD_KB_HACKER, L"\u6697\u591C\u6781\u5BA2\u9ED1");
     AppendMenuW(kbMenu, MF_STRING | (app.settings.keyboardTheme == KeyboardTheme::RetroCream ? MF_CHECKED : 0), CMD_KB_RETRO, L"\u590D\u53E4\u5976\u6CB9\u7070");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)kbMenu, L"\u952E\u76D8\u914D\u8272");
 
     if (hasSelectableEyes(app.settings.coatTheme)) {
         HMENU eyeMenu = CreatePopupMenu();
-        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, L"\u7ECF\u5178\u8367\u5149\u9EC4\u7EFF (\u539F\u7248)");
+        AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::NeonChartreuse ? MF_CHECKED : 0), CMD_EYE_LIME, L"经典荧光黄绿");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SiameseBlue ? MF_CHECKED : 0), CMD_EYE_BLUE, L"\u66B9\u7F57\u5B9D\u77F3\u84DD");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::WarmAmber ? MF_CHECKED : 0), CMD_EYE_AMBER, L"\u7425\u73C0\u91D1\u77B3");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::IceCyan ? MF_CHECKED : 0), CMD_EYE_CYAN, L"\u51B0\u6676\u6D45\u84DD");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::SoftAmber ? MF_CHECKED : 0), CMD_EYE_SOFT_AMBER, L"柔和琥珀");
         AppendMenuW(eyeMenu, MF_STRING | (app.settings.eyeTheme == EyeColorTheme::ReferenceHazel ? MF_CHECKED : 0), CMD_EYE_REFERENCE_HAZEL, L"淡金青绿");
-        AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, L"\u77B3\u8272\u5207\u6362");
+        AppendMenuW(menu, MF_POPUP, (UINT_PTR)eyeMenu, L"瞳色");
     }
 
     // Scale submenu
@@ -601,13 +605,13 @@ void showContextMenu(AppState& app, POINT screenPt) {
     AppendMenuW(scaleMenu, MF_STRING | chk(1.00f), CMD_SCALE_100, L"\u6807\u51C6 (1.0x)");
     AppendMenuW(scaleMenu, MF_STRING | chk(1.25f), CMD_SCALE_125, L"\u504F\u5927 (1.25x)");
     AppendMenuW(scaleMenu, MF_STRING | chk(1.50f), CMD_SCALE_150, L"\u8D85\u5927 (1.5x)");
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)scaleMenu, L"\u5C3A\u5BF8\u5927\u5C0F");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)scaleMenu, L"桌宠尺寸");
 
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     if (app.settings.coatTheme == CatCoatTheme::Wang)
         AppendMenuW(menu, MF_STRING, CMD_DEMO_GO_STONE, L"演示落子");
-    AppendMenuW(menu, MF_STRING, CMD_DEMO_BURST, L"\u6F14\u793A\u6253\u5B57\u52A8\u753B");
-    AppendMenuW(menu, MF_STRING, CMD_RESET_POS, L"\u91CD\u7F6E\u4F4D\u7F6E\u5230\u53F3\u4E0B\u89D2");
+    AppendMenuW(menu, MF_STRING, CMD_DEMO_BURST, L"演示打字");
+    AppendMenuW(menu, MF_STRING, CMD_RESET_POS, L"移回右下角");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_QUIT, L"\u9000\u51FA ArkCats");
 
@@ -659,7 +663,7 @@ void showContextMenu(AppState& app, POINT screenPt) {
             break;
         case CMD_MIGRATE_AUTOSTART:
             if (!migrateLegacyAutostart(true))
-                MessageBoxW(menuOwner, L"未能完成开机启动迁移，请重新打开菜单检查。", kAppName, MB_OK | MB_ICONINFORMATION);
+                MessageBoxW(menuOwner, L"迁移失败，请重新打开菜单检查。", kAppName, MB_OK | MB_ICONINFORMATION);
             break;
         case CMD_TOGGLE_AUTOSTART:
             setAutoStartEnabled(!isAutoStartEnabled());

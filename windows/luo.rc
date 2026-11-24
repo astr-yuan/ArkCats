@@ -1,0 +1,3 @@
+#include "src/LuoResourceIds.h"
+
+IDR_LUO_CAT_ART RCDATA "art/luo/cat.png"

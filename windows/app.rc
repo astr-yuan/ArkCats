@@ -2,3 +2,4 @@
 1 24 "app.manifest"
 #include "version.rc"
 #include "foxes.rc"
+#include "luo.rc"

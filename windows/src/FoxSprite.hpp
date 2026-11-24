@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#include "PngResource.hpp"
 #include "FoxResourceIds.h"
 
 namespace arkfox {
@@ -14,48 +15,12 @@ namespace detail {
 
 // GDI+ expects premultiplied BGRA. Keep that representation through sampling,
 // motion and compositing, including the pale fur at semitransparent edges.
-struct Pixel { BYTE b, g, r, a; };
-using Pixels = std::vector<Pixel>;
+using arkart::Pixel;
+using arkart::Pixels;
+using arkart::loadPng;
 constexpr int Side = 560;
 constexpr int EyeX = 196, EyeY = 180, EyeW = 168, EyeH = 72;
 constexpr int PawX = 196, PawY = 376, PawW = 168, PawH = 152;
-
-inline bool loadPng(int id, int w, int h, Pixels& pixels) {
-    HMODULE module = GetModuleHandleW(nullptr);
-    HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10));
-    if (!resource) return false;
-    DWORD size = SizeofResource(module, resource);
-    const void* bytes = LockResource(LoadResource(module, resource));
-    if (!bytes || !size) return false;
-    HGLOBAL storage = GlobalAlloc(GMEM_MOVEABLE, size);
-    if (!storage) return false;
-    void* destination = GlobalLock(storage);
-    if (!destination) { GlobalFree(storage); return false; }
-    std::memcpy(destination, bytes, size);
-    GlobalUnlock(storage);
-    IStream* stream = nullptr;
-    if (FAILED(CreateStreamOnHGlobal(storage, TRUE, &stream))) {
-        GlobalFree(storage); return false;
-    }
-    bool ok = false;
-    {
-        Gdiplus::Bitmap image(stream);
-        Gdiplus::Rect bounds(0, 0, w, h);
-        Gdiplus::BitmapData data{};
-        if (image.GetLastStatus() == Gdiplus::Ok && image.GetWidth() == UINT(w) &&
-            image.GetHeight() == UINT(h) &&
-            image.LockBits(&bounds, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &data) == Gdiplus::Ok) {
-            pixels.resize(w*h);
-            auto* start = static_cast<const BYTE*>(data.Scan0);
-            for (int y = 0; y < h; ++y)
-                std::memcpy(pixels.data()+y*w, start+y*data.Stride, w*sizeof(Pixel));
-            image.UnlockBits(&data);
-            ok = true;
-        }
-    }
-    stream->Release();
-    return ok;
-}
 
 inline Pixel blend(Pixel a, Pixel b, unsigned fraction) {
     auto channel = [fraction](unsigned from, unsigned to) -> BYTE {

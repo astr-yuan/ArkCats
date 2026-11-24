@@ -19,7 +19,8 @@ enum class CatCoatTheme : int {
     SapphireTwinTail = 4,
     Wang = 5,
     RedFox = 6,
-    ArcticFox = 7
+    ArcticFox = 7,
+    LuoXiaohei = 8
 };
 
 inline constexpr bool isFoxCoat(CatCoatTheme coat) {
@@ -27,7 +28,7 @@ inline constexpr bool isFoxCoat(CatCoatTheme coat) {
 }
 
 inline constexpr bool hasSelectableEyes(CatCoatTheme coat) {
-    return coat != CatCoatTheme::Wang && !isFoxCoat(coat);
+    return coat != CatCoatTheme::Wang && coat != CatCoatTheme::LuoXiaohei && !isFoxCoat(coat);
 }
 
 enum class KeyboardTheme : int {
@@ -68,6 +69,7 @@ struct CatSettings {
             case CatCoatTheme::OrangeWhite: eyeTheme = EyeColorTheme::SoftAmber; break;
             case CatCoatTheme::ArcticFox: eyeTheme = EyeColorTheme::IceCyan; break;
             case CatCoatTheme::Wang: eyeTheme = EyeColorTheme::WarmAmber; break;
+            case CatCoatTheme::LuoXiaohei: eyeTheme = EyeColorTheme::SoftAmber; break;
             default: eyeTheme = EyeColorTheme::SiameseBlue; break;
         }
     }
@@ -114,7 +116,7 @@ struct CatSettings {
         scale = percent >= 50 && percent <= 200 ? (float)percent / 100.0f : 1.0f;
         const DWORD skin = legacy ? (DWORD)CatCoatTheme::SapphireTwinTail :
                                     readDword(L"Skin", MAXDWORD);
-        const bool knownSkin = skin <= (DWORD)CatCoatTheme::ArcticFox;
+        const bool knownSkin = skin <= (DWORD)CatCoatTheme::LuoXiaohei;
         selectCoat(knownSkin ? (CatCoatTheme)skin : CatCoatTheme::SapphireTwinTail);
         const DWORD keyboard = readDword(L"KeyboardTheme", 0);
         if (keyboard <= (DWORD)KeyboardTheme::RetroCream) keyboardTheme = (KeyboardTheme)keyboard;
@@ -247,6 +249,12 @@ struct CatPose {
     float tailLiftDegrees = 0.0f;
     float alertPupils = 0.0f;
     float sleepZOpacity = 1.0f;
+    float luoQuietAge = 0.f;
+    float luoNoticeAge = 3.f;
+    float luoBrushAge = 3.f;
+    float luoSleepBlend = 0.f;
+
+    float rawBlink() const { return blinkProgress_; }
 
     float effectiveEyeClosure() const {
         float petClose = std::max(petHeadIntensity, petBodyIntensity * 0.62f);
@@ -323,6 +331,7 @@ public:
             pose_.headOffsetY.value -= 6.f*pulse(.12f,.30f,.31f,.55f);
             toward(pose_.bodySquash.value,1.02f,wake);
             pose_.sleepiness *= 1.f-open;
+            pose_.luoSleepBlend *= 1.f-open;
             pose_.alertPupils = .97f*open;
             pose_.tailLiftDegrees = 4.f*wake;
             pose_.sleepZOpacity = 1.f-pulse(.085f,.28f,2.12f,2.67f);
@@ -436,6 +445,9 @@ public:
         if (reaction_.mode() != StartleMode::None) reaction_ = StartleReaction{};
         foxWeightShift = Spring2D{};
         foxLeftContact = foxRightContact = Spring1D{};
+        luoQuietAge = 0.f;
+        luoBrushAge = luoNoticeAge = 3.f;
+        luoSleepBlend = 0.f;
         coat_ = coat;
     }
 
@@ -458,6 +470,10 @@ public:
     int totalPetSessions = 0;
 
     StartleMode startle(const InputEngine& input) {
+        if (coat_ == CatCoatTheme::LuoXiaohei && reaction_.mode() == StartleMode::None) {
+            luoQuietAge = 0.f;
+            luoNoticeAge = 0.f;
+        }
         return reaction_.begin(*this, input, nowSeconds());
     }
     StartleMode startleMode() const { return reaction_.mode(); }
@@ -520,6 +536,8 @@ public:
         double now = nowSeconds();
         lastPetTime_ = now;
         sleepiness = 0.0f;
+        if (isHead && coat_ == CatCoatTheme::LuoXiaohei && petHeadIntensity < .05f)
+            luoBrushAge = -.10f;
 
         float energy = std::min(delta / 26.0f, 0.35f);
         if (isHead) {
@@ -581,7 +599,8 @@ public:
                 sleepZCooldown_ -= dt;
                 if (sleepZCooldown_ <= 0.0f) {
                     sleepZCooldown_ = 2.6f;
-                    sparkles.push_back({ { SeatAnchor.x + 42.0f, 100.0f }, { 12.0f, -18.0f }, 0.0f, 1.1f, true });
+                    const Pt origin = coat_ == CatCoatTheme::LuoXiaohei ? Pt{190.f,144.f} : Pt{SeatAnchor.x + 42.f,100.f};
+                    sparkles.push_back({ origin, { 12.0f, -18.0f }, 0.0f, 1.1f, true });
                 }
             }
         } else {
@@ -603,11 +622,13 @@ public:
         // 3. Limb assignment (Left Paw, Right Paw, 3-Key Hind Foot!)
         constexpr double tapHoldWindow = 0.14;
         const bool fox = isFoxCoat(coat_);
+        const bool luo = coat_ == CatCoatTheme::LuoXiaohei;
+        const bool tracksLatestInput = fox || luo;
         const bool draggingMouse = fox && engine.anyMouseButtonDown();
-        const double mouseAge = fox && engine.lastMouseActivity() <= 0.0 ? 1e6 :
-            now - (fox ? engine.lastMouseActivity() : engine.lastMouseMoveTime);
-        const bool mouseHeld = fox ? engine.anyMouseButtonDown() : (engine.leftMouseDown || engine.rightMouseDown);
-        const bool keyboardIsLatest = fox && hasLastTypedPoint_ && lastTypedTime_ > engine.lastMouseActivity();
+        const double mouseStamp = tracksLatestInput ? engine.lastMouseActivity() : engine.lastMouseMoveTime;
+        const double mouseAge = tracksLatestInput && mouseStamp <= 0.0 ? 1e6 : now - mouseStamp;
+        const bool mouseHeld = tracksLatestInput ? engine.anyMouseButtonDown() : (engine.leftMouseDown || engine.rightMouseDown);
+        const bool keyboardIsLatest = tracksLatestInput && hasLastTypedPoint_ && lastTypedTime_ > mouseStamp;
         const bool allowMousePaw = !keyboardIsLatest || mouseHeld;
         const bool mouseRecent = (mouseAge < 2.2 || mouseHeld) && allowMousePaw;
         const bool mouseActivelyUsed = (mouseAge < .75 || mouseHeld) && allowMousePaw;
@@ -710,6 +731,7 @@ public:
         }
 
         if (footKey != PhysicalKey::None) {
+            if (luo && hindFootActive.target == 0.f) luoBrushAge = -.27f;
             hindFoot.setTarget(KeyboardLayout::canvasPointForKey(footKey));
             hindFootActive.target = 1.0f;
         } else {
@@ -722,6 +744,18 @@ public:
         rightPaw.step(dt, 360.0f, 24.0f);
         hindFoot.step(dt, 320.0f, 22.0f);
         hindFootActive.step(dt, 260.0f, 22.0f);
+        if (luo) {
+            // Switch between the sitting and curled artwork over a short transition.
+            const bool asleep = sleepiness >= .62f;
+            const float blend = 1.f - std::exp(-(asleep ? 4.2f : 7.5f) * dt);
+            luoSleepBlend += ((asleep ? 1.f : 0.f) - luoSleepBlend) * blend;
+            const bool quiet = activeKeys.empty() && !leftPawTyping && !rightPawTyping && !leftPawOnMouse &&
+                !mouseHeld && idleSec > .3 && petHeadIntensity < .05f && petBodyIntensity < .05f &&
+                sleepiness < .025f && reaction_.mode() == StartleMode::None;
+            luoQuietAge = quiet ? luoQuietAge + dt : 0.f;
+            luoNoticeAge = std::min(3.f, luoNoticeAge + dt);
+            luoBrushAge = std::min(3.f, luoBrushAge + dt);
+        }
 
         // 4. Body lean, squash & ear motion
         float targetShiftX = 0.0f, targetBodyTilt = 0.0f;
@@ -753,7 +787,7 @@ public:
         earTwitch.step(dt, 320.0f, 16.0f);
 
         // 5. 2.5D Head Turning (Yaw + Pitch) & Eye Tracking (Windows screen Y is top-down!)
-        Pt gaze = fox ? foxLookTarget(windowRect, engine, now) : catLookTarget(windowRect, engine, now);
+        Pt gaze = tracksLatestInput ? cursorOrKeyGaze(windowRect, engine, now) : catLookTarget(windowRect, engine, now);
         float lookX = gaze.x, lookY = gaze.y;
 
         lookingAtGo_ = go.age < 0.96f && activeKeys.empty();
@@ -923,7 +957,7 @@ private:
         return gaze;
     }
 
-    Pt foxLookTarget(const RECT& rect, const InputEngine& input, double now) const {
+    Pt cursorOrKeyGaze(const RECT& rect, const InputEngine& input, double now) const {
         const float scaleX = std::max(1.f, float(rect.right - rect.left)) / CanvasWidth;
         const float scaleY = std::max(1.f, float(rect.bottom - rect.top)) / CanvasHeight;
         Pt target{float(input.lastCursorPos.x - rect.left) / scaleX,
@@ -933,10 +967,12 @@ private:
             (!input.pressedOrder.empty() || now - lastTypedTime_ < .65)) {
             target = input.pressedOrder.empty() ? lastTypedPoint_ : KeyboardLayout::canvasPointForKey(input.pressedOrder.back());
         }
-        // Both source images have their eye midpoint at (280,216), relative to the tail base (280,520).
+        // Locate the eyes in canvas units before taking the direction to the cursor or key.
         const float artScale = coat_ == CatCoatTheme::RedFox ? .34f : .37f;
-        const Pt eyes{SeatAnchor.x + .9f * foxWeightShift.x.value,
-                      238.f - 304.f * artScale + .9f * foxWeightShift.y.value + artScale * headOffsetY.value};
+        const Pt eyes = coat_ == CatCoatTheme::LuoXiaohei ?
+            Pt{184.f + bodyShiftX.value, 124.f + headOffsetY.value} :
+            Pt{SeatAnchor.x + .9f * foxWeightShift.x.value,
+               238.f - 304.f * artScale + .9f * foxWeightShift.y.value + artScale * headOffsetY.value};
         const float dx = (target.x - eyes.x) / 60.f;
         const float dy = (target.y - eyes.y) / 48.f;
         const float length = std::sqrt(1.f + dx*dx + dy*dy);

@@ -15,6 +15,7 @@
 #include "WangFace.hpp"
 #include "GoStones.hpp"
 #include "FoxRenderer.hpp"
+#include "LuoRenderer.hpp"
 
 enum class CatHitZone {
     None,
@@ -29,6 +30,8 @@ public:
     static CatHitZone hitTest(Pt p, const CatPhysics& simulation) {
         if (isFoxCoat(simulation.coat()))
             return static_cast<CatHitZone>(arkfox::hitTest(p, simulation));
+        if (simulation.coat() == CatCoatTheme::LuoXiaohei)
+            return static_cast<CatHitZone>(arkluo::hitTest(p, simulation));
         bool wangCoat = simulation.coat() == CatCoatTheme::Wang;
         const CatPose& physics = simulation.displayPose();
         p.y += physics.jumpHeight;
@@ -80,6 +83,8 @@ public:
 
         if (isFoxCoat(settings.coatTheme)) {
             arkfox::draw(g, simulation, settings.coatTheme);
+        } else if (settings.coatTheme == CatCoatTheme::LuoXiaohei) {
+            arkluo::draw(g, simulation);
         } else if (wangCoat) {
             wang::body::tail(g, seatX, seatY, physics);
             wang::body::torso(g, seatX, seatY, physics);

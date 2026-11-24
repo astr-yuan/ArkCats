@@ -1,0 +1,6 @@
+#ifndef ARKCATS_LUO_RESOURCE_IDS_H
+#define ARKCATS_LUO_RESOURCE_IDS_H
+
+#define IDR_LUO_CAT_ART 307
+
+#endif
